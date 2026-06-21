@@ -22,6 +22,18 @@ export interface FormMeta {
 
 const MS_ROOT = "__ms"; // scratch state namespace for multiselect checkboxes
 
+// Strip inline markdown emphasis markers (**bold**, *italic*, `code`) to plain
+// text. This never produces HTML — json-render's Text sets textContent — so it
+// keeps the "rendered safely" guarantee while reading cleanly instead of showing
+// literal markers.
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/`(.+?)`/g, "$1");
+}
+
 // Split prose into paragraphs and render each as a safe Text node. json-render's
 // Text sets textContent (never innerHTML), so markdown-ish body can't inject.
 function proseElements(
@@ -32,7 +44,7 @@ function proseElements(
   const ids: string[] = [];
   body
     .split(/\n{2,}/)
-    .map((p) => p.trim())
+    .map((p) => stripMarkdown(p.trim()))
     .filter(Boolean)
     .forEach((para, i) => {
       const id = `${idPrefix}${i}`;
