@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>云化 codex · 4 方案跨端对比</title>
+<style>
+  :root{--bg:#0d1117;--panel:#141a22;--panel2:#1b232e;--line:#28313c;--ink:#e6edf3;--dim:#9aa7b4;
+    --accent:#7c93ff;--ok:#39d39f;--warn:#e3b341;--danger:#f0816a;--r:12px;}
+  @media(prefers-color-scheme:light){:root{--bg:#f6f8fa;--panel:#fff;--panel2:#eef1f5;--line:#d8dee4;--ink:#1c2128;--dim:#5a6673;}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:30px 18px 80px}
+  h1{font-size:25px;margin:0 0 4px}.sub{color:var(--dim);font-size:14px}
+  h2{font-size:19px;margin:36px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:15px;color:var(--accent);margin:18px 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin:14px 0}
+  .hi{border-left:3px solid var(--ok);padding-left:14px}.warnbox{border-left:3px solid var(--warn);padding-left:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.03em}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:.86em;background:var(--panel2);padding:1px 5px;border-radius:5px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}
+  .g{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
+  .y{background:color-mix(in srgb,var(--warn) 24%,transparent);color:var(--warn)}
+  .r{background:color-mix(in srgb,var(--danger) 22%,transparent);color:var(--danger)}
+  .muted{color:var(--dim)}ul.t{margin:8px 0;padding-left:20px}ul.t li{margin:5px 0}
+  .rate{font-weight:800;font-size:15px}
+  svg{width:100%;height:auto}
+  footer{margin-top:42px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+  footer a{color:var(--accent)}
+</style></head><body><div class="wrap">
+<h1>云化 codex —— 4 方案跨端适配对比</h1>
+<div class="sub">把 codex 大脑放进 e2b、跨桌面/移动暴露给薄客户端,哪种 harness 协议最合适</div>
+
+<div class="card hi">
+<h3 style="margin-top:0;color:var(--ok)">先把两层分开(这是看懂对比的钥匙)</h3>
+<p><b>协议层</b>(codex 说什么话)和<b>传输层</b>(怎么跨端送到客户端)是<b>正交</b>的两件事:</p>
+<ul class="t">
+<li><b>方案 1/2/3 是「协议」之争</b> —— App Server vs ACP vs MCP,三者<b>本质都是 stdio JSON-RPC</b>。所以"跨端"对它们是<b>同一个传输问题</b>(都要把 stdio 隧道出去),真正的差异在<b>交互保真度</b>和<b>提供方可换性</b>。</li>
+<li><b>方案 4(opencli codex adaptor)其实是「传输/打包」想法</b> —— 复用我们已经把跨端解决掉的 opencli `/ext` 会合通道。它不替代协议,而是<b>承载</b>协议。</li>
+<li><b>关键事实:OpenAI 自己试过 codex-as-MCP 又放弃了</b> —— 因为"streaming diffs / 审批流 / 线程持久化映射不进 MCP 的工具模型"。这正是 Render 需要的东西。</li>
+</ul>
+</div>
+
+<h2>1 · 对比矩阵</h2>
+<table>
+<thead><tr><th style="width:15%">方案</th><th>本质</th><th>交互保真度<br>(流式/HITL/审批)</th><th>跨端传输</th><th>提供方可换</th><th>Render 契合 / 工时</th><th>跨端评级</th></tr></thead>
+<tbody>
+<tr>
+<td><b>1. Codex App Server</b></td>
+<td>codex 原生双向协议(stdio JSON-RPC),驱动 CLI/VSCode/web 同一套 API。OpenAI 推荐的全保真路径。</td>
+<td><span class="pill g">满</span> 流式 diff、审批、线程持久化 —— 正是 Render 的 json-render UX 依赖的</td>
+<td>stdio → 已用 e2b SDK 隧道(<code>E2bProcess</code>);移动加 WS 网关</td>
+<td><span class="pill r">锁 codex</span></td>
+<td><span class="pill g">已实现</span> Render 的 agent-bridge 就是它;复用现成</td>
+<td class="rate" style="color:var(--ok)">★★★★★</td>
+</tr>
+<tr>
+<td><b>2. ACP</b><br>(Agent Client Protocol)</td>
+<td>Zed 发起、JetBrains 支持的<b>通用标准</b>(对标 LSP):任意 agent ↔ 任意编辑器。codex 经 <code>codex-acp</code> 桥接,stdio。</td>
+<td><span class="pill y">中</span> 标准化但最小公约数,codex 专有能力可能透不出</td>
+<td>stdio → 同样要隧道(无额外优势)</td>
+<td><span class="pill g">可换</span> codex↔claude↔gemini 同一 UI</td>
+<td><span class="pill y">需适配</span> 加一层 codex-acp 桥;Render 要改说 ACP</td>
+<td class="rate" style="color:var(--warn)">★★★☆☆</td>
+</tr>
+<tr>
+<td><b>3. Codex as MCP server</b></td>
+<td>把 codex 当一个 MCP「工具/子 agent」被调用(stdio / streamable-HTTP)。<b>OpenAI 为 VSCode 试过后放弃</b>。</td>
+<td><span class="pill r">弱</span> 工具模型装不下流式/审批/线程 —— OpenAI 自己的结论</td>
+<td><span class="pill g">streamable-HTTP 最原生远端</span>(无需 stdio 隧道)</td>
+<td><span class="pill g">可组合</span> 任意 MCP client 调</td>
+<td><span class="pill y">错位</span> 适合"codex 当子 agent",不适合主交互大脑</td>
+<td class="rate" style="color:var(--danger)">★★☆☆☆<br><span class="muted" style="font-size:11px">(作主大脑)</span></td>
+</tr>
+<tr>
+<td><b>4. opencli codex<br>desktop adaptor</b></td>
+<td>把 codex 接成 opencli 适配器,<b>复用 opencli `/ext` 会合通道</b>(我们已把它跨端解决,且承载 Plane-2)。本质是传输打包。</td>
+<td><span class="pill y">取决于上层</span> 适配器是命令/响应模型;要装流式得在上面自建流通道(≈ 把 App Server 塞进会合)</td>
+<td><span class="pill g">复用已解决的会合</span> 设备拨出 + daemon 路由,NAT 友好</td>
+<td>—</td>
+<td><span class="pill g">复用传输</span> 一条通道同时载 Plane-1+Plane-2;但别把大脑做成"命令适配器"</td>
+<td class="rate" style="color:var(--ok)">★★★★☆<br><span class="muted" style="font-size:11px">(当传输)</span></td>
+</tr>
+</tbody></table>
+
+<h2>2 · 协议 × 传输:它们其实是组合关系</h2>
+<div class="card">
+<svg viewBox="0 0 720 250" role="img" aria-label="协议层与传输层">
+<text x="20" y="24" fill="var(--dim)" font-size="12">协议层(codex 说什么)</text>
+<rect x="20" y="34" width="200" height="46" rx="8" fill="none" stroke="var(--ok)"/><text x="120" y="55" text-anchor="middle" fill="var(--ok)" font-size="12" font-weight="700">① App Server</text><text x="120" y="71" text-anchor="middle" fill="var(--ink)" font-size="10">全保真(选它)</text>
+<rect x="240" y="34" width="200" height="46" rx="8" fill="none" stroke="var(--warn)"/><text x="340" y="55" text-anchor="middle" fill="var(--warn)" font-size="12" font-weight="700">② ACP</text><text x="340" y="71" text-anchor="middle" fill="var(--ink)" font-size="10">换提供方时(以后)</text>
+<rect x="460" y="34" width="240" height="46" rx="8" fill="none" stroke="var(--danger)"/><text x="580" y="55" text-anchor="middle" fill="var(--danger)" font-size="12" font-weight="700">③ MCP</text><text x="580" y="71" text-anchor="middle" fill="var(--ink)" font-size="10">codex 当子 agent(给 krew)</text>
+<text x="20" y="120" fill="var(--dim)" font-size="12">传输层(怎么跨端)</text>
+<rect x="20" y="130" width="220" height="60" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="130" y="152" text-anchor="middle" fill="var(--ink)" font-size="11" font-weight="700">e2b SDK stdio 隧道</text><text x="130" y="170" text-anchor="middle" fill="var(--dim)" font-size="10">桌面远端(已实现)</text>
+<rect x="250" y="130" width="220" height="60" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="360" y="152" text-anchor="middle" fill="var(--ink)" font-size="11" font-weight="700">④ opencli /ext 会合</text><text x="360" y="170" text-anchor="middle" fill="var(--dim)" font-size="10">一条通道载 脑+浏览器</text>
+<rect x="480" y="130" width="220" height="60" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="590" y="152" text-anchor="middle" fill="var(--ink)" font-size="11" font-weight="700">WS 网关(krewhub)</text><text x="590" y="170" text-anchor="middle" fill="var(--dim)" font-size="10">移动薄客户端</text>
+<text x="20" y="225" fill="var(--ink)" font-size="12" font-weight="700">推荐组合 = ① App Server 协议 装进 ④ 会合/WS 传输</text>
+<line x1="120" y1="80" x2="120" y2="130" stroke="var(--ok)" stroke-width="2" marker-end="url(#a)"/>
+<line x1="160" y1="80" x2="340" y2="130" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--ok)"/></marker></defs>
+</svg>
+</div>
+
+<h2>3 · 结论 & 推荐</h2>
+<div class="card hi">
+<ul class="t">
+<li><b>主大脑协议 = ① App Server。</b> Render 已建在它上面,流式/审批/线程全保真(MCP 装不下、ACP 打折)。OpenAI 官方也推荐它做全保真嵌入。<b>不换。</b></li>
+<li><b>跨端传输 = ④ 的好点子 + WS 网关。</b> 把 App Server 的帧<b>装进</b> opencli `/ext` 会合通道 —— 这样 <b>Plane-1(大脑)和 Plane-2(浏览器)共用一条已解决跨端、NAT 友好、设备拨出的通道</b>(统一鉴权/重连)。移动端再加 krewhub WS 网关。<b>注意:别把 codex 做成"命令适配器"</b>(那会丢交互流),会合只当传输,里面跑的还是 App Server 流。</li>
+<li><b>③ MCP 反向用:把 codex 暴露成 MCP 给 krew 的 agent 图组合</b>(krewhub 的 AgentHand/delegate)—— codex 当<b>子 agent</b>,与"Render 主交互大脑"并存,不冲突。</li>
+<li><b>② ACP 当战略对冲:</b> 等真要"一个 Render harness 跨 codex/claude/gemini 切换"时,再把 ACP 作为可选外层协议引入。现在不做。</li>
+</ul>
+<p style="margin-bottom:0"><b>一句话:协议选 App Server(保真),传输借 opencli 会合(复用已解决的跨端),MCP 留给 krew 做组合,ACP 留作以后换脑的对冲。</b></p>
+</div>
+
+<div class="warnbox">
+<b>为什么 #4 当传输而不当协议:</b> opencli 适配器是"跑命令拿结果",而 codex 会话是长连接、流式、带 HITL server-request。把大脑硬塞进命令模型 = 丢掉交互;但 opencli 的 `/ext` <b>会合通道</b>(设备拨出 + daemon 路由)恰好是我们已经验证跨端、NAT 友好的传输 —— 让它多开一条"brain channel"承载 App Server 流即可,一举解决"脑和浏览器两条跨端链路"的统一。
+</div>
+
+<footer>
+云化 codex harness 对比 · 协议事实来自:
+<a href="https://www.infoq.com/news/2026/02/opanai-codex-app-server/">InfoQ: Codex App Server</a> ·
+<a href="https://developers.openai.com/codex/mcp">OpenAI: Codex MCP</a> ·
+<a href="https://github.com/cola-io/codex-acp">codex-acp (ACP bridge)</a> ·
+<a href="https://deepwiki.com/openai/codex/6.4-mcp-server-implementation-(codex-mcp-server)">codex-mcp-server</a><br>
+(openai.com/index/unlocking-the-codex-harness 抓取 403,已据上述来源 + Render agent-bridge 现状落实)<br>
+关联:render-krew-integrated-architecture.html · render-multiplatform-codex-auth.html
+</footer>
+</div></body></html>

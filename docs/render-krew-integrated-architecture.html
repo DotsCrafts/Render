@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Render × krew-dev · 整体架构</title>
+<style>
+  :root{--bg:#0d1117;--panel:#141a22;--panel2:#1b232e;--line:#28313c;--ink:#e6edf3;--dim:#9aa7b4;
+    --accent:#7c93ff;--ok:#39d39f;--warn:#e3b341;--danger:#f0816a;--reuse:#39d39f;--build:#e3b341;--r:12px;}
+  @media(prefers-color-scheme:light){:root{--bg:#f6f8fa;--panel:#fff;--panel2:#eef1f5;--line:#d8dee4;--ink:#1c2128;--dim:#5a6673;}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:30px 18px 80px}
+  h1{font-size:25px;margin:0 0 4px}.sub{color:var(--dim);font-size:14px}
+  h2{font-size:19px;margin:38px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:15px;color:var(--accent);margin:18px 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin:14px 0}
+  .hi{border-left:3px solid var(--ok);padding-left:14px}.warnbox{border-left:3px solid var(--warn);padding-left:14px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:.86em;background:var(--panel2);padding:1px 6px;border-radius:6px}
+  .pill{display:inline-block;padding:1px 9px;border-radius:999px;font-size:11px;font-weight:700}
+  .reuse{background:color-mix(in srgb,var(--reuse) 22%,transparent);color:var(--reuse)}
+  .build{background:color-mix(in srgb,var(--build) 24%,transparent);color:var(--build)}
+  .muted{color:var(--dim)}ul.t{margin:8px 0;padding-left:20px}ul.t li{margin:5px 0}
+  .tabs{display:flex;gap:6px;margin:10px 0;flex-wrap:wrap}
+  .tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);padding:7px 13px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+  .tabs button.active{background:var(--accent);color:#06080d;border-color:var(--accent)}
+  .topo{display:none}.topo.active{display:block}svg{width:100%;height:auto}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  footer{margin-top:46px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+</style></head>
+<body><div class="wrap">
+<h1>Render × krew-dev — 整体架构</h1>
+<div class="sub">复用 krew-dev 已部署在 testnet3 的 e2b + krewhub + krewauth + agent-vault;Render 把 codex 大脑搬进 e2b sandbox,桌面/移动统一</div>
+
+<div class="card hi">
+<h3 style="margin-top:0;color:var(--ok)">核心洞察</h3>
+<ul class="t">
+<li><b>Render ≈ 又一个 krew 客户端</b> —— 远端大脑这条路的基础设施(e2b 集群、编排 krewhub、身份 krewauth、凭证出口 agent-vault)<b>krew-dev 已经在 testnet3 部好了</b>,不用重建。</li>
+<li><b>唯一根本差异:大脑跑哪。</b> krew 现在用 krewcli 在<b>本机</b>跑 brain;Render 要把 <code>codex app-server</code> 跑进 <b>e2b sandbox</b>(移动端必须如此)。</li>
+<li><b>传输大半已就绪:</b> Render 的 <code>E2bSandbox</code> 已经能用 e2b SDK 把 codex 的 stdio 隧道出来 —— 桌面端设好 <code>E2B_API_KEY</code>+<code>E2B_DOMAIN</code> 指向这个集群,大脑立刻能在 e2b 远端跑。缺的是:① codex 的 e2b 模板 ② 移动端用的公网 WS 网关 ③ Plane-2(浏览器)回连客户端的 relay。</li>
+</ul>
+</div>
+
+<h2>1 · 复用映射(krew 已有 → Render 怎么用)</h2>
+<table>
+<thead><tr><th>krew 组件</th><th>现状</th><th>Render 用途</th><th>动作</th></tr></thead>
+<tbody>
+<tr><td><b>e2b 集群</b> <code>10.20.100.214:3000</code></td><td>4 节点 Nomad/Consul,KVM Firecracker,X-API-Key,intra-VPC,仅 base 模板</td><td>跑 codex 大脑的 sandbox</td><td><span class="pill reuse">复用</span> + 加 codex 模板</td></tr>
+<tr><td><b>krewhub</b> <code>hub.cookrew.dev</code></td><td>控制面:e2b client、sandbox 生命周期、Hand 派发、SSE、OAuth</td><td>Render 移动端的网关:鉴权→建 sandbox→中继协议</td><td><span class="pill reuse">复用</span> + 加 codex-brain 模式 + WS 隧道</td></tr>
+<tr><td><b>krewauth</b> <code>auth.cookrew.dev</code></td><td>ES256 JWT + device flow + SIWE + passkey</td><td>Render 客户端身份(桌面/移动登录)</td><td><span class="pill reuse">复用</span></td></tr>
+<tr><td><b>agent-vault</b> <code>:14321/:14322</code></td><td>凭证出口代理(<code>HTTPS_PROXY</code> 注入,brain 不见明文)</td><td>给远端大脑注入 Plane-1 模型/API key,不落 brain</td><td><span class="pill reuse">复用</span></td></tr>
+<tr><td><b>Render <code>E2bSandbox</code></b></td><td>已实现 e2b SDK stdio 隧道</td><td>codex app-server 在 e2b 里跑,stdio 经 SDK 隧道</td><td><span class="pill reuse">已有</span> + domain 可配</td></tr>
+<tr><td><b>krewcli</b>(本机跑 brain)</td><td>本机 A2A 网关,brain 本地</td><td>不直接用(它的本地模型不适配移动);其 MCP-bridge/delegate 思路可借鉴</td><td><span class="pill build">参考</span></td></tr>
+</tbody></table>
+
+<h2>2 · 三种运行模式</h2>
+<div class="tabs">
+  <button class="active" onclick="T('d1',this)">桌面·本地大脑</button>
+  <button onclick="T('d2',this)">桌面·远端大脑(e2b 直连)</button>
+  <button onclick="T('m',this)">移动·网关 + 远端大脑</button>
+</div>
+
+<div class="topo active" id="topo-d1"><div class="card">
+<p><b>桌面本地</b>(今天就是):codex 在用户机器 <code>local-seatbelt</code> 跑,Plane-2 在 Electron 标签。<b>零基础设施成本</b>,不碰 krew。模型走 base_url(你的 ifunk)。→ 这是 Free 层 / 获客漏斗。</p>
+<svg viewBox="0 0 720 150"><rect x="6" y="6" width="708" height="138" rx="12" fill="none" stroke="var(--line)"/>
+<text x="20" y="26" fill="var(--dim)" font-size="12">用户 Mac/Win(全本地)</text>
+<rect x="24" y="40" width="200" height="90" rx="9" fill="none" stroke="var(--accent)"/><text x="34" y="60" fill="var(--accent)" font-size="11" font-weight="700">② Electron 浏览面+凭证</text><text x="34" y="80" fill="var(--ink)" font-size="10.5">WebContentsView / persist:render</text><text x="34" y="100" fill="var(--ink)" font-size="10.5">opencli bridge</text>
+<rect x="250" y="40" width="200" height="90" rx="9" fill="none" stroke="var(--ok)"/><text x="260" y="60" fill="var(--ok)" font-size="11" font-weight="700">① codex(本地 seatbelt)</text><text x="260" y="82" fill="var(--ink)" font-size="10.5">CODEX_HOME(Render 设置)</text>
+<rect x="476" y="40" width="220" height="90" rx="9" fill="var(--panel2)" stroke="var(--line)"/><text x="486" y="60" fill="var(--dim)" font-size="11">模型 provider(base_url)</text><text x="486" y="82" fill="var(--ink)" font-size="10.5">api.ai.ifunk.cn / OpenAI</text>
+<line x1="450" y1="85" x2="476" y2="85" stroke="var(--dim)" marker-end="url(#a)"/><line x1="224" y1="85" x2="250" y2="85" stroke="var(--dim)" marker-end="url(#a)"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--dim)"/></marker></defs></svg>
+</div></div>
+
+<div class="topo" id="topo-d2"><div class="card">
+<p><b>桌面远端</b>:Render 设 <code>E2B_API_KEY</code>+<code>E2B_DOMAIN</code> 指向 krew 的 e2b 集群,<code>E2bSandbox</code> 在 e2b 里 spawn codex,stdio 经 e2b SDK 隧道回桌面。Plane-2 仍在本地 Electron。<b>前提:e2b 暴露给笔记本(ALB/VPN)。</b> 用于重负载 / 验证 Plane-① 远端化。</p>
+<svg viewBox="0 0 720 170"><rect x="6" y="6" width="350" height="158" rx="12" fill="none" stroke="var(--line)"/><text x="18" y="24" fill="var(--dim)" font-size="11">用户桌面</text>
+<rect x="22" y="36" width="312" height="56" rx="8" fill="none" stroke="var(--accent)"/><text x="32" y="56" fill="var(--accent)" font-size="11" font-weight="700">② Electron 浏览面+凭证(本地)</text><text x="32" y="76" fill="var(--ink)" font-size="10">opencli bridge / persist:render</text>
+<rect x="22" y="100" width="312" height="52" rx="8" fill="none" stroke="var(--warn)"/><text x="32" y="120" fill="var(--warn)" font-size="11" font-weight="700">CodexClient(stdio over e2b SDK)</text><text x="32" y="140" fill="var(--ink)" font-size="10">E2bSandbox + E2B_DOMAIN</text>
+<rect x="370" y="6" width="344" height="158" rx="12" fill="none" stroke="var(--line)"/><text x="382" y="24" fill="var(--dim)" font-size="11">krew testnet VPC(已部署)</text>
+<rect x="386" y="36" width="312" height="50" rx="8" fill="none" stroke="var(--ok)"/><text x="396" y="56" fill="var(--ok)" font-size="11" font-weight="700">① e2b sandbox:codex app-server</text><text x="396" y="74" fill="var(--ink)" font-size="10">codex 模板(待建)</text>
+<rect x="386" y="94" width="150" height="58" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="396" y="114" fill="var(--ink)" font-size="10">e2b API :3000</text><text x="396" y="132" fill="var(--ink)" font-size="10">proxy :3002</text>
+<rect x="548" y="94" width="150" height="58" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="558" y="114" fill="var(--ink)" font-size="10">agent-vault</text><text x="558" y="132" fill="var(--ink)" font-size="10">→ 注入模型 key</text>
+<line x1="356" y1="126" x2="386" y2="60" stroke="var(--warn)" stroke-width="2" marker-end="url(#b)"/>
+<defs><marker id="b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--warn)"/></marker></defs></svg>
+</div></div>
+
+<div class="topo" id="topo-m"><div class="card">
+<p><b>移动</b>:手机起不了 Node / 够不到 VPC。薄客户端 → <b>krewhub 网关</b>(公网 <code>hub.cookrew.dev</code>,krewauth 鉴权)→ 在 e2b 里起 codex sandbox → <b>WS 隧道</b>把 codex app-server 协议中继回手机渲染。Plane-2 留手机原生 WebView,远端 opencli 经 relay 驱动它。模型 key 经 agent-vault 注入。</p>
+<svg viewBox="0 0 720 220"><rect x="6" y="6" width="250" height="208" rx="12" fill="none" stroke="var(--line)"/><text x="18" y="24" fill="var(--dim)" font-size="11">手机(原生薄客户端)</text>
+<rect x="20" y="34" width="222" height="64" rx="8" fill="none" stroke="var(--accent)"/><text x="30" y="54" fill="var(--accent)" font-size="11" font-weight="700">② WebView 浏览面 + 凭证</text><text x="30" y="73" fill="var(--ink)" font-size="10">WKWebView / Keystore</text><text x="30" y="90" fill="var(--ink)" font-size="10">(Plane-2 永不出设备)</text>
+<rect x="20" y="106" width="222" height="44" rx="8" fill="none" stroke="var(--warn)"/><text x="30" y="126" fill="var(--warn)" font-size="11" font-weight="700">③ json-render + WS client</text><text x="30" y="143" fill="var(--ink)" font-size="10">协议帧 over WS</text>
+<rect x="20" y="158" width="222" height="44" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="30" y="178" fill="var(--ink)" font-size="10">krewauth 登录(JWT)</text><text x="30" y="195" fill="var(--ink)" font-size="10">ASWebAuth / Custom Tabs</text>
+<rect x="270" y="6" width="180" height="208" rx="12" fill="none" stroke="var(--line)"/><text x="282" y="24" fill="var(--dim)" font-size="11">krewhub 网关(公网)</text>
+<rect x="284" y="40" width="152" height="60" rx="8" fill="none" stroke="var(--build)"/><text x="294" y="60" fill="var(--build)" font-size="11" font-weight="700">WS 会话隧道</text><text x="294" y="80" fill="var(--ink)" font-size="9.5">codex stdio ↔ 手机</text><text x="294" y="94" fill="var(--ink)" font-size="9.5">(待建)</text>
+<rect x="284" y="110" width="152" height="44" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="294" y="130" fill="var(--ink)" font-size="10">sandbox 生命周期</text><text x="294" y="146" fill="var(--ink)" font-size="9.5">(krewhub 已有)</text>
+<rect x="284" y="162" width="152" height="44" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="294" y="182" fill="var(--ink)" font-size="10">Plane-2 relay → 手机</text><text x="294" y="198" fill="var(--ink)" font-size="9.5">(待建)</text>
+<rect x="464" y="6" width="250" height="208" rx="12" fill="none" stroke="var(--line)"/><text x="476" y="24" fill="var(--dim)" font-size="11">e2b 集群(已部署)</text>
+<rect x="478" y="40" width="222" height="64" rx="8" fill="none" stroke="var(--ok)"/><text x="488" y="60" fill="var(--ok)" font-size="11" font-weight="700">① codex sandbox</text><text x="488" y="80" fill="var(--ink)" font-size="10">codex app-server + opencli</text><text x="488" y="96" fill="var(--ink)" font-size="9.5">codex 模板(待建)</text>
+<rect x="478" y="112" width="222" height="40" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="488" y="136" fill="var(--ink)" font-size="10">e2b API :3000 / proxy :3002</text>
+<rect x="478" y="160" width="222" height="44" rx="8" fill="var(--panel2)" stroke="var(--line)"/><text x="488" y="180" fill="var(--ink)" font-size="10">agent-vault → 模型 key 注入</text><text x="488" y="197" fill="var(--ink)" font-size="9.5">brain 不见明文</text>
+<line x1="256" y1="128" x2="270" y2="70" stroke="var(--warn)" stroke-width="2" marker-end="url(#c)"/><text x="252" y="150" fill="var(--dim)" font-size="9">TLS WS</text>
+<line x1="450" y1="70" x2="464" y2="72" stroke="var(--ok)" stroke-width="2" marker-end="url(#c)"/>
+<defs><marker id="c" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--warn)"/></marker></defs></svg>
+<div class="legend"><span><i class="dot" style="background:var(--ok)"></i>复用已部署</span><span><i class="dot" style="background:var(--build)"></i>待建</span><span><i class="dot" style="background:var(--accent)"></i>客户端本地</span></div>
+</div></div>
+
+<h2>3 · 凭证模型(双类 —— Plane-2 永不出设备)</h2>
+<div class="card">
+<p>关键:凭证分<b>两类</b>,隔离边界完全不同。e2b / 远端大脑<b>只</b>短时接触 Plane-1,<b>Plane-2 永远留在用户设备</b>。</p>
+<table>
+<thead><tr><th>类别</th><th>是什么</th><th>存哪</th><th>碰 e2b?</th></tr></thead>
+<tbody>
+<tr><td><b>Plane-2 网站登录态</b></td><td>dianping/github 的 cookie/session</td><td><b>用户设备本地</b>:桌面 <code>persist:render</code> / 手机 WebView cookie store</td><td><span class="pill reuse">永不</span></td></tr>
+<tr><td><b>Plane-1 模型凭证</b></td><td>codex 的 API key / OAuth token</td><td>桌面 <code>safeStorage</code>;移动经 agent-vault <b>临时</b>注入远端 sandbox</td><td><span class="pill build">短时·不落盘</span></td></tr>
+</tbody></table>
+<p class="muted"><b>"要不要给手机端单独设权限?"</b> —— 不用为"网站登录态"在 e2b 里设权限,因为它根本不在 e2b。per-user 隔离已由三层现成机制保证:<b>krewauth</b> 身份(每人一 JWT)+ <b>e2b sandbox</b> 每会话独立 microVM + <b>agent-vault</b> per-vault token 作用域。无需另造"手机端权限系统"。</p>
+</div>
+
+<h2>4 · 浏览器驱动后端对照(CDP vs 原生 WebView)</h2>
+<p>移动端拿不到干净的、App 内可用的 CDP:<b>iOS WKWebView 是 WebKit,根本没有 CDP</b>(只有 Safari/USB 的 Web Inspector,App 内不可程序化);<b>Android WebView 内核是 Chromium,DevTools 仅在 adb <code>chrome://inspect</code> 调试通道暴露</b>,不是生产自动化通道。<b>但不需要 CDP</b> —— bridge 的 <code>/ext</code> 协议是在 <code>navigate/exec/cookies</code> 这一层抽象,后端可按平台<b>可插拔</b>:桌面用 CDP,移动用原生 WebView API。</p>
+<div class="card">
+<svg viewBox="0 0 720 230" role="img" aria-label="浏览器驱动后端抽象">
+  <rect x="180" y="10" width="360" height="48" rx="9" fill="none" stroke="var(--accent)"/>
+  <text x="360" y="32" text-anchor="middle" fill="var(--accent)" font-size="12" font-weight="700">opencli bridge /ext 命令面(平台无关)</text>
+  <text x="360" y="49" text-anchor="middle" fill="var(--ink)" font-size="10">navigate · exec · cookies · inject · screenshot · tabs</text>
+  <!-- three backends -->
+  <rect x="24" y="110" width="210" height="106" rx="9" fill="none" stroke="var(--ok)"/>
+  <text x="129" y="132" text-anchor="middle" fill="var(--ok)" font-size="11.5" font-weight="700">WebContentsTarget</text>
+  <text x="129" y="150" text-anchor="middle" fill="var(--ink)" font-size="10">桌面 · CDP</text>
+  <text x="129" y="168" text-anchor="middle" fill="var(--dim)" font-size="9.5">webContents.debugger</text>
+  <text x="129" y="186" text-anchor="middle" fill="var(--dim)" font-size="9.5">(Electron,已实现)</text>
+  <text x="129" y="204" text-anchor="middle" fill="var(--ok)" font-size="9.5">✓ 全命令 + network-capture</text>
+  <rect x="255" y="110" width="210" height="106" rx="9" fill="none" stroke="var(--build)"/>
+  <text x="360" y="132" text-anchor="middle" fill="var(--build)" font-size="11.5" font-weight="700">WKWebViewTarget</text>
+  <text x="360" y="150" text-anchor="middle" fill="var(--ink)" font-size="10">iOS · 原生</text>
+  <text x="360" y="168" text-anchor="middle" fill="var(--dim)" font-size="9.5">evaluateJavaScript / WKHTTPCookieStore</text>
+  <text x="360" y="186" text-anchor="middle" fill="var(--dim)" font-size="9.5">(待建)</text>
+  <text x="360" y="204" text-anchor="middle" fill="var(--warn)" font-size="9.5">⚠ network-capture 受限</text>
+  <rect x="486" y="110" width="210" height="106" rx="9" fill="none" stroke="var(--build)"/>
+  <text x="591" y="132" text-anchor="middle" fill="var(--build)" font-size="11.5" font-weight="700">AndroidWebViewTarget</text>
+  <text x="591" y="150" text-anchor="middle" fill="var(--ink)" font-size="10">Android · 原生</text>
+  <text x="591" y="168" text-anchor="middle" fill="var(--dim)" font-size="9.5">evaluateJavascript / CookieManager</text>
+  <text x="591" y="186" text-anchor="middle" fill="var(--dim)" font-size="9.5">(待建)</text>
+  <text x="591" y="204" text-anchor="middle" fill="var(--warn)" font-size="9.5">~ 部分 network(intercept)</text>
+  <line x1="300" y1="58" x2="129" y2="110" stroke="var(--dim)" stroke-width="1.5" marker-end="url(#bk)"/>
+  <line x1="360" y1="58" x2="360" y2="110" stroke="var(--dim)" stroke-width="1.5" marker-end="url(#bk)"/>
+  <line x1="420" y1="58" x2="591" y2="110" stroke="var(--dim)" stroke-width="1.5" marker-end="url(#bk)"/>
+  <defs><marker id="bk" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--dim)"/></marker></defs>
+</svg>
+<div class="legend"><span><i class="dot" style="background:var(--ok)"></i>已实现</span><span><i class="dot" style="background:var(--build)"></i>待建(原生后端)</span></div>
+</div>
+<table>
+<thead><tr><th>bridge 命令</th><th>桌面 CDP</th><th>iOS WKWebView</th><th>Android WebView</th></tr></thead>
+<tbody>
+<tr><td>navigate</td><td><code>Page.navigate</code></td><td><code>load(URLRequest)</code></td><td><code>loadUrl()</code></td></tr>
+<tr><td><b>exec / evaluate</b>(opencli 主力)</td><td><code>Runtime.evaluate</code></td><td><code>evaluateJavaScript()</code></td><td><code>evaluateJavascript()</code></td></tr>
+<tr><td>cookies 读/写</td><td><code>Network.getCookies</code></td><td><code>WKHTTPCookieStore</code></td><td><code>CookieManager</code></td></tr>
+<tr><td>注入脚本</td><td><code>addScriptToEvaluateOnNewDocument</code></td><td><code>WKUserScript</code></td><td>注入 / evaluate</td></tr>
+<tr><td>screenshot</td><td><code>Page.captureScreenshot</code></td><td><code>takeSnapshot()</code></td><td>draw to Bitmap</td></tr>
+<tr><td>登录(HITL)</td><td>Render 标签</td><td>用户直接在 WKWebView 登录</td><td>同(系统/自带 WebView)</td></tr>
+<tr><td class="warn">network-capture</td><td><code>Network</code> 域 ✓</td><td class="warn">无等价(仅导航级)</td><td>部分(<code>shouldInterceptRequest</code>)</td></tr>
+</tbody></table>
+<div class="warnbox"><b>唯一短板 = network-capture。</b> opencli 大多数适配器靠"页面里跑 JS(exec)+ 读 cookie"工作,这俩原生 WebView 都是一等公民,直接平移。少数依赖 CDP <code>Network</code> 域抓请求/响应的适配器,移动端标记"受限",降级走页面 JS 抓数据。<b>这不阻塞主路径。</b></div>
+
+<h2>5 · 会话生命周期(移动 / 远端)</h2>
+<div class="card"><ol class="t">
+<li><b>登录</b>:客户端 → krewauth(device flow / passkey)→ JWT。</li>
+<li><b>开会话</b>:客户端 → krewhub <code>POST /sessions</code>(带 JWT)→ krewhub 用 e2b client 建一个 <b>codex 模板</b>的 sandbox。</li>
+<li><b>注入凭证</b>:krewhub 经 agent-vault 给 sandbox 配 <code>HTTPS_PROXY</code> + Render provider 设置(base_url/auth)写进 sandbox 的 CODEX_HOME。<b>模型 key 永不进 brain 明文。</b></li>
+<li><b>起大脑</b>:sandbox 内跑 <code>codex app-server</code>;krewhub 把它的 stdio 经 <b>WS 隧道</b>桥到客户端的 CodexClient。</li>
+<li><b>渲染</b>:codex 产出 json-render UX 帧 → WS → 手机渲染器。HITL(approve/login)→ 帧回传。</li>
+<li><b>Plane-2</b>:大脑要登录态站点时,opencli 经 <b>relay</b> 驱动<b>手机本地 WebView</b>(同桌面"在 Render 自己标签登录")—— cookie 留设备。</li>
+<li><b>结束/挂起</b>:idle → e2b pause(省算力);重连 → resume 同一 sandbox。</li>
+</ol></div>
+
+<h2>6 · 要建的(Gap)</h2>
+<table>
+<thead><tr><th>Gap</th><th>说明</th><th>归属</th></tr></thead>
+<tbody>
+<tr><td><span class="pill build">G1</span> codex e2b 模板</td><td>base 模板上加 codex-cli + opencli + Render bridge 启动脚本(brain 镜像)。用 e2b template-manager 构建。</td><td>krew infra/e2b</td></tr>
+<tr><td><span class="pill build">G2</span> WS 会话隧道</td><td>krewhub 加 <code>GET /sessions/{id}/ws</code>,把 sandbox 内 codex app-server 的 stdio 双向桥到客户端。复用 Render 的 CodexClient(换传输)。</td><td>krewhub + Render</td></tr>
+<tr><td><span class="pill build">G3</span> Plane-2 relay + 原生后端</td><td>bridge <code>/ext</code> 命令面保持不变,加可插拔后端:桌面 <code>WebContentsTarget</code>(CDP,已有)→ 移动 <code>WKWebViewTarget</code>/<code>AndroidWebViewTarget</code>(原生 evaluateJavaScript/cookie store)。远端 opencli 经 WS relay 驱动客户端 WebView;Plane-2 登录态留设备。network-capture 移动端降级。</td><td>Render(后端抽象 + 原生实现)</td></tr>
+<tr><td><span class="pill build">G4</span> e2b 暴露 + domain 可配</td><td>e2b ingress 决策(ALB/VPN);Render <code>E2bSandbox.domain</code> + <code>E2B_DOMAIN</code> 一等可配。</td><td>krew infra + Render</td></tr>
+<tr><td><span class="pill build">G5</span> 移动外壳</td><td>原生 WebView + json-render 渲染器 + WS client + krewauth 登录(P2)。</td><td>krew-fe/apps/{ios,android}</td></tr>
+</tbody></table>
+
+<h2>7 · 推进顺序</h2>
+<table>
+<thead><tr><th>阶段</th><th>交付</th></tr></thead>
+<tbody>
+<tr><td><span class="pill reuse">现在</span></td><td><b>Phase A</b>(进行中):桌面本地大脑 + Render-managed codex provider/auth(OAuth/api-key/base-url)。零基础设施。</td></tr>
+<tr><td><span class="pill build">下一步</span></td><td><b>G4 + G1</b>:暴露 e2b 给桌面(VPN/ALB)+ 建 codex 模板 → 桌面"远端大脑"模式跑通(复用现有 E2bSandbox stdio 隧道)。<b>这是最小可验证的远端化,不碰移动。</b></td></tr>
+<tr><td><span class="pill build">再下</span></td><td><b>G2 + G3</b>:krewhub WS 会话隧道 + Plane-2 relay → 远端大脑能驱动客户端浏览器。</td></tr>
+<tr><td><span class="pill build">最后</span></td><td><b>G5</b>:移动外壳(iOS/Android)接上 G2/G3 → 移动端端到端。</td></tr>
+</tbody></table>
+
+<div class="card warnbox">
+<b>关键判断:</b> 因为 krew 这套已经部署,Render 的远端化不是"从零搭后端",而是"把 codex 大脑塞进已有的 e2b + 复用 krewhub/krewauth/agent-vault"。<b>最小验证路径 = G4+G1(桌面远端大脑)</b>,它不依赖移动外壳,且复用 Render 已有的 <code>E2bSandbox</code> stdio 隧道 —— 风险最低、最快证明整条链路。模型成本仍走 BYO-key(见 e2b 成本测算)。
+</div>
+
+<footer>
+Render × krew-dev 整体架构 · 基于 krew-dev/infra/e2b(testnet3, 10.20.100.214:3000)+ krewhub/krewauth/agent-vault 现状<br>
+关联:render-multiplatform-codex-auth.html · render-e2b-cost-pricing.html · krew-dev/docs/ARCHITECTURE.md · INVOCATION-CONTRACT.md
+</footer>
+</div>
+<script>function T(w,b){document.querySelectorAll('.topo').forEach(t=>t.classList.remove('active'));document.getElementById('topo-'+w).classList.add('active');b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');}</script>
+</body></html>

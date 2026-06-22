@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Render · 整体架构(权威)</title>
+<style>
+  :root{--bg:#0d1117;--panel:#141a22;--panel2:#1b232e;--line:#28313c;--ink:#e6edf3;--dim:#9aa7b4;
+    --accent:#7c93ff;--ok:#39d39f;--warn:#e3b341;--danger:#f0816a;--p1:#39d39f;--p2:#7c93ff;--r:12px;}
+  @media(prefers-color-scheme:light){:root{--bg:#f6f8fa;--panel:#fff;--panel2:#eef1f5;--line:#d8dee4;--ink:#1c2128;--dim:#5a6673;}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:30px 18px 80px}
+  h1{font-size:25px;margin:0 0 4px}.sub{color:var(--dim);font-size:14px}
+  h2{font-size:19px;margin:38px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin:14px 0}
+  .hi{border-left:3px solid var(--ok);padding-left:14px}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:.86em;background:var(--panel2);padding:1px 5px;border-radius:5px}
+  ul.t{margin:8px 0;padding-left:20px}ul.t li{margin:5px 0}.muted{color:var(--dim)}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:10px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}.dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11.5px;text-transform:uppercase}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700}
+  .reuse{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
+  .build{background:color-mix(in srgb,var(--warn) 24%,transparent);color:var(--warn)}
+  footer{margin-top:42px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+</style></head><body><div class="wrap">
+<h1>Render — 整体架构(权威)</h1>
+<div class="sub">Electron + 移动原生 的 agent 浏览器 · codex App Server 单协议 · 复用 krew-dev(e2b/krewhub/krewauth/agent-vault)· 双平面凭证</div>
+
+<div class="card hi">
+<b>锁定的决策</b>
+<ul class="t">
+<li><b>大脑协议 = codex App Server(单选)</b>。流式/审批/HITL/线程全保真;Render 已建于此。不用 MCP/ACP/opencli-adaptor 当主协议。</li>
+<li><b>大脑位置</b>:桌面本地 <code>seatbelt</code>(零成本)/ 桌面远端 + 移动 = <b>e2b sandbox</b>(复用 krew 已部署集群)。</li>
+<li><b>跨端传输</b>:App Server 的 stdio 帧 —— 桌面本地走管道、桌面远端走 e2b SDK、移动走 krewhub WS 网关。同一批帧。</li>
+<li><b>Plane-2(网站登录态)永不出设备</b>;<b>Plane-1(模型凭证)设备保管</b>(OAuth refresh_token 留设备,仅发短时 token;或 egress 经设备)。</li>
+<li><b>浏览器驱动</b>:opencli <code>/ext</code> 会合(设备拨出 + daemon 路由,NAT 友好);后端可插拔 —— 桌面 CDP、移动原生 WebView。</li>
+</ul>
+</div>
+
+<h2>1 · 组件架构图</h2>
+<div class="card">
+<svg viewBox="0 0 1000 560" role="img" aria-label="Render 组件架构">
+<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="var(--dim)"/></marker>
+<marker id="arg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="var(--ok)"/></marker>
+<marker id="arb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="var(--accent)"/></marker></defs>
+
+<!-- ============ DEVICE ============ -->
+<rect x="14" y="14" width="430" height="532" rx="13" fill="none" stroke="var(--line)"/>
+<text x="30" y="36" fill="var(--dim)" font-size="12">客户端 · 用户设备(桌面 Electron / 移动原生)</text>
+
+<!-- Plane-2 browser -->
+<rect x="30" y="48" width="398" height="150" rx="9" fill="color-mix(in srgb,var(--p2) 8%,transparent)" stroke="var(--p2)"/>
+<text x="44" y="70" fill="var(--p2)" font-size="12.5" font-weight="700">② 浏览面 + 凭证(Plane-2 · 永不出设备)</text>
+<rect x="44" y="82" width="370" height="40" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="100" fill="var(--ink)" font-size="11">WebView 标签(Agent group)</text>
+<text x="56" y="115" fill="var(--dim)" font-size="10">后端:桌面 CDP(webContents.debugger)/ 移动原生(evaluateJS)</text>
+<rect x="44" y="128" width="180" height="34" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="149" fill="var(--ink)" font-size="10.5">登录态 cookie store</text>
+<rect x="234" y="128" width="180" height="34" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="246" y="149" fill="var(--ink)" font-size="10.5">opencli /ext 会合 client</text>
+<rect x="44" y="168" width="370" height="22" rx="6" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="183" fill="var(--dim)" font-size="10">persist:render(桌面)/ Keychain·Keystore(移动)</text>
+
+<!-- renderer + codexclient -->
+<rect x="30" y="210" width="398" height="100" rx="9" fill="none" stroke="var(--warn)"/>
+<text x="44" y="232" fill="var(--warn)" font-size="12.5" font-weight="700">③ 协议 client</text>
+<rect x="44" y="242" width="180" height="56" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="262" fill="var(--ink)" font-size="11">json-render 渲染器</text>
+<text x="56" y="280" fill="var(--dim)" font-size="10">UX surfaces + HITL</text>
+<rect x="234" y="242" width="180" height="56" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="246" y="262" fill="var(--ink)" font-size="11">CodexClient</text>
+<text x="246" y="280" fill="var(--dim)" font-size="10">App Server 帧</text>
+
+<!-- desktop-local brain (inside device) -->
+<rect x="30" y="322" width="398" height="92" rx="9" fill="color-mix(in srgb,var(--p1) 8%,transparent)" stroke="var(--p1)" stroke-dasharray="5 4"/>
+<text x="44" y="344" fill="var(--p1)" font-size="12.5" font-weight="700">① codex App Server(桌面本地模式 · seatbelt)</text>
+<text x="44" y="364" fill="var(--ink)" font-size="10.5">仅桌面:本地沙箱直接跑,零基础设施成本</text>
+<rect x="44" y="372" width="370" height="30" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="391" fill="var(--ink)" font-size="10.5">CODEX_HOME ← Render Provider 设置(Phase A)</text>
+
+<!-- credential mgr -->
+<rect x="30" y="426" width="398" height="106" rx="9" fill="none" stroke="var(--p1)"/>
+<text x="44" y="448" fill="var(--p1)" font-size="12.5" font-weight="700">凭证(设备保管)</text>
+<rect x="44" y="458" width="180" height="30" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="477" fill="var(--ink)" font-size="10.5">safeStorage(桌面)</text>
+<rect x="234" y="458" width="180" height="30" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="246" y="477" fill="var(--ink)" font-size="10.5">Keychain/Keystore(移动)</text>
+<rect x="44" y="494" width="370" height="30" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="56" y="513" fill="var(--dim)" font-size="10">Plane-1:OAuth refresh 留设备,仅发短时 token / egress</text>
+
+<!-- ============ TRANSPORT ============ -->
+<rect x="460" y="120" width="120" height="320" rx="10" fill="var(--panel2)" stroke="var(--line)"/>
+<text x="520" y="200" text-anchor="middle" fill="var(--ink)" font-size="12" font-weight="700">传输</text>
+<text x="520" y="226" text-anchor="middle" fill="var(--dim)" font-size="10">stdio 管道</text>
+<text x="520" y="244" text-anchor="middle" fill="var(--dim)" font-size="10">(桌面本地)</text>
+<text x="520" y="272" text-anchor="middle" fill="var(--dim)" font-size="10">e2b SDK</text>
+<text x="520" y="290" text-anchor="middle" fill="var(--dim)" font-size="10">(桌面远端)</text>
+<text x="520" y="318" text-anchor="middle" fill="var(--dim)" font-size="10">WS 网关</text>
+<text x="520" y="336" text-anchor="middle" fill="var(--dim)" font-size="10">(移动)</text>
+<text x="520" y="372" text-anchor="middle" fill="var(--warn)" font-size="10">App Server</text>
+<text x="520" y="388" text-anchor="middle" fill="var(--warn)" font-size="10">帧 · 同一批</text>
+
+<!-- ============ REMOTE / KREW ============ -->
+<rect x="596" y="14" width="390" height="532" rx="13" fill="none" stroke="var(--line)"/>
+<text x="612" y="36" fill="var(--dim)" font-size="12">远端 · 复用 krew-dev(testnet3)</text>
+
+<rect x="612" y="48" width="358" height="92" rx="9" fill="color-mix(in srgb,var(--p1) 8%,transparent)" stroke="var(--p1)"/>
+<text x="626" y="70" fill="var(--p1)" font-size="12.5" font-weight="700">① codex App Server(e2b sandbox)</text>
+<text x="626" y="89" fill="var(--ink)" font-size="10.5">桌面远端 + 移动:codex 模板(待建)</text>
+<rect x="626" y="98" width="330" height="32" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+<text x="638" y="118" fill="var(--ink)" font-size="10.5">+ opencli(经 /ext 会合驱动设备 WebView)</text>
+
+<rect x="612" y="150" width="358" height="52" rx="9" fill="var(--panel2)" stroke="var(--build)"/>
+<text x="626" y="172" fill="var(--build)" font-size="12" font-weight="700">krewhub 网关</text>
+<text x="626" y="190" fill="var(--ink)" font-size="10.5">会话/生命周期 · WS 隧道 · /ext 路由(待扩)</text>
+
+<rect x="612" y="212" width="172" height="52" rx="9" fill="var(--panel2)" stroke="var(--line)"/>
+<text x="626" y="234" fill="var(--ink)" font-size="11.5" font-weight="700">krewauth</text>
+<text x="626" y="252" fill="var(--dim)" font-size="10">JWT 身份/device flow</text>
+<rect x="798" y="212" width="172" height="52" rx="9" fill="var(--panel2)" stroke="var(--line)"/>
+<text x="812" y="234" fill="var(--ink)" font-size="11.5" font-weight="700">agent-vault</text>
+<text x="812" y="252" fill="var(--dim)" font-size="10">Plane-1 egress 注入</text>
+
+<rect x="612" y="276" width="358" height="48" rx="9" fill="var(--panel2)" stroke="var(--line)"/>
+<text x="626" y="305" fill="var(--ink)" font-size="11">e2b 集群(Nomad/Firecracker)· 10.20.100.214:3000</text>
+
+<rect x="612" y="392" width="358" height="48" rx="9" fill="var(--panel)" stroke="var(--line)"/>
+<text x="626" y="421" fill="var(--ink)" font-size="11">模型 provider(base_url · 你的 api.ai.ifunk.cn / OpenAI)</text>
+
+<!-- connectors -->
+<line x1="428" y1="270" x2="460" y2="270" stroke="var(--warn)" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="580" y1="270" x2="612" y2="94" stroke="var(--warn)" stroke-width="2" marker-end="url(#ar)"/>
+<text x="448" y="262" fill="var(--dim)" font-size="9">App Server</text>
+<!-- brain → model (via vault) -->
+<line x1="884" y1="264" x2="884" y2="392" stroke="var(--ok)" stroke-width="1.6" marker-end="url(#arg)"/>
+<text x="888" y="360" fill="var(--ok)" font-size="9">模型调用(经 vault 注入)</text>
+<line x1="791" y1="94" x2="884" y2="212" stroke="var(--ok)" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#arg)"/>
+<!-- plane-2 rendezvous: brain.opencli → device webview -->
+<path d="M612 118 C 500 118, 360 60, 234 145" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arb)"/>
+<text x="300" y="40" fill="var(--accent)" font-size="9.5">/ext 会合 → 驱动设备 WebView(Plane-2 留设备)</text>
+<!-- device → krewauth/krewhub -->
+<line x1="444" y1="270" x2="612" y2="176" stroke="var(--dim)" stroke-width="1" stroke-dasharray="2 3"/>
+</svg>
+<div class="legend">
+<span><i class="dot" style="background:var(--p1)"></i>① 大脑 + Plane-1 凭证</span>
+<span><i class="dot" style="background:var(--p2)"></i>② 浏览面 + Plane-2(留设备)</span>
+<span><i class="dot" style="background:var(--warn)"></i>③ 协议/传输(App Server)</span>
+<span><i class="dot" style="background:var(--panel2);border:1px solid var(--line)"></i>krew 复用</span>
+</div>
+</div>
+<p class="muted">桌面本地模式:① 大脑那块落在设备框内(虚线绿框,seatbelt),不碰右侧 krew。桌面远端 + 移动:① 落在右侧 e2b。两种模式同一套 ②③ 与协议。</p>
+
+<h2>2 · 交互时序图(移动 / 远端会话 —— 最完整路径)</h2>
+<div class="card">
+<svg viewBox="0 0 1000 600" role="img" aria-label="交互时序图">
+<defs><marker id="m" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="var(--accent)"/></marker>
+<marker id="mg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="var(--ok)"/></marker>
+<marker id="md" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="var(--dim)"/></marker></defs>
+<!-- lifelines -->
+<g font-size="11" font-weight="700" text-anchor="middle">
+<rect x="20" y="14" width="92" height="34" rx="7" fill="var(--panel2)" stroke="var(--line)"/><text x="66" y="35" fill="var(--ink)">用户</text>
+<rect x="150" y="14" width="120" height="34" rx="7" fill="color-mix(in srgb,var(--p2) 14%,transparent)" stroke="var(--p2)"/><text x="210" y="29" fill="var(--ink)">设备客户端</text><text x="210" y="43" fill="var(--dim)" font-size="9" font-weight="400">WebView+渲染器</text>
+<rect x="316" y="14" width="96" height="34" rx="7" fill="var(--panel2)" stroke="var(--line)"/><text x="364" y="35" fill="var(--ink)">krewauth</text>
+<rect x="456" y="14" width="110" height="34" rx="7" fill="var(--panel2)" stroke="var(--build)"/><text x="511" y="35" fill="var(--ink)">krewhub 网关</text>
+<rect x="610" y="14" width="120" height="34" rx="7" fill="color-mix(in srgb,var(--p1) 14%,transparent)" stroke="var(--p1)"/><text x="670" y="29" fill="var(--ink)">codex@e2b</text><text x="670" y="43" fill="var(--dim)" font-size="9" font-weight="400">App Server</text>
+<rect x="772" y="14" width="96" height="34" rx="7" fill="var(--panel2)" stroke="var(--line)"/><text x="820" y="35" fill="var(--ink)">agent-vault</text>
+<rect x="900" y="14" width="92" height="34" rx="7" fill="var(--panel2)" stroke="var(--line)"/><text x="946" y="29" fill="var(--ink)">模型/</text><text x="946" y="43" fill="var(--ink)">站点</text>
+</g>
+<g stroke="var(--line)" stroke-dasharray="3 4">
+<line x1="66" y1="48" x2="66" y2="580"/><line x1="210" y1="48" x2="210" y2="580"/><line x1="364" y1="48" x2="364" y2="580"/><line x1="511" y1="48" x2="511" y2="580"/><line x1="670" y1="48" x2="670" y2="580"/><line x1="820" y1="48" x2="820" y2="580"/><line x1="946" y1="48" x2="946" y2="580"/>
+</g>
+<!-- messages -->
+<g font-size="10.5" fill="var(--ink)">
+<!-- 1 login -->
+<line x1="210" y1="74" x2="364" y2="74" stroke="var(--accent)" marker-end="url(#m)"/><text x="216" y="69">1 登录(device flow)</text>
+<line x1="364" y1="92" x2="210" y2="92" stroke="var(--accent)" stroke-dasharray="4 3" marker-end="url(#m)"/><text x="220" y="87" fill="var(--dim)">JWT(身份)</text>
+<!-- 2 session -->
+<line x1="210" y1="116" x2="511" y2="116" stroke="var(--accent)" marker-end="url(#m)"/><text x="216" y="111">2 POST /sessions(JWT + Render provider 设置)</text>
+<!-- 3 create sandbox -->
+<line x1="511" y1="138" x2="670" y2="138" stroke="var(--ok)" marker-end="url(#mg)"/><text x="517" y="133">3 建 e2b sandbox(codex 模板)</text>
+<!-- 4 vault provision -->
+<line x1="511" y1="160" x2="820" y2="160" stroke="var(--ok)" marker-end="url(#mg)"/><text x="517" y="155">4 配 Plane-1 egress(HTTPS_PROXY)</text>
+<!-- 5 start codex -->
+<line x1="511" y1="182" x2="670" y2="182" stroke="var(--ok)" marker-end="url(#mg)"/><text x="517" y="177">5 起 codex app-server</text>
+<!-- 6 WS tunnel -->
+<line x1="210" y1="206" x2="511" y2="206" stroke="var(--warn)" stroke-width="2" marker-end="url(#m)"/><line x1="511" y1="206" x2="670" y2="206" stroke="var(--warn)" stroke-width="2" marker-end="url(#m)"/><text x="216" y="201" fill="var(--warn)">6 WS 隧道建立(App Server 帧 端到端)</text>
+<!-- 7 prompt -->
+<line x1="66" y1="232" x2="210" y2="232" stroke="var(--accent)" marker-end="url(#m)"/><text x="72" y="227">7 输入"查大众点评X"</text>
+<line x1="210" y1="250" x2="670" y2="250" stroke="var(--warn)" marker-end="url(#m)"/><text x="216" y="245" fill="var(--warn)">8 submit turn(经 WS)</text>
+<!-- 9 model call -->
+<line x1="670" y1="274" x2="820" y2="274" stroke="var(--ok)" marker-end="url(#mg)"/><text x="676" y="269">9 模型请求</text>
+<line x1="820" y1="292" x2="946" y2="292" stroke="var(--ok)" marker-end="url(#mg)"/><text x="700" y="287" fill="var(--dim)">10 注入 Plane-1 凭证 → provider</text>
+<line x1="946" y1="310" x2="670" y2="310" stroke="var(--ok)" stroke-dasharray="4 3" marker-end="url(#mg)"/><text x="676" y="305" fill="var(--dim)">11 推理结果</text>
+<!-- 12 needs login: plane-2 rendezvous -->
+<rect x="150" y="326" width="600" height="150" rx="8" fill="color-mix(in srgb,var(--p2) 7%,transparent)" stroke="var(--p2)" stroke-dasharray="4 4"/>
+<text x="160" y="343" fill="var(--p2)" font-size="10.5" font-weight="700">Plane-2 — 全程在设备,登录态永不出设备</text>
+<line x1="670" y1="362" x2="210" y2="362" stroke="var(--accent)" marker-end="url(#m)"/><text x="300" y="357" fill="var(--accent)">12 opencli /ext 会合:navigate 大众点评登录</text>
+<line x1="66" y1="384" x2="210" y2="384" stroke="var(--accent)" stroke-dasharray="4 3" marker-end="url(#m)"/><text x="72" y="379" fill="var(--dim)">13 用户在 WebView 内登录(HITL)</text>
+<line x1="210" y1="406" x2="946" y2="406" stroke="var(--accent)" marker-end="url(#m)"/><text x="216" y="401">14 设备 WebView 加载站点(带本地 cookie)</text>
+<line x1="946" y1="424" x2="210" y2="424" stroke="var(--accent)" stroke-dasharray="4 3" marker-end="url(#m)"/><text x="216" y="419" fill="var(--dim)">15 页面数据</text>
+<line x1="210" y1="446" x2="670" y2="446" stroke="var(--accent)" marker-end="url(#m)"/><text x="216" y="441">16 exec/cookies 结果经会合回 opencli</text>
+<text x="160" y="468" fill="var(--dim)" font-size="9.5">cookie 留 cookie store;codex 永不见 Plane-2 凭证</text>
+<!-- 17 render -->
+<line x1="670" y1="500" x2="210" y2="500" stroke="var(--warn)" marker-end="url(#m)"/><text x="216" y="495" fill="var(--warn)">17 json-render UX 帧(经 WS)</text>
+<line x1="210" y1="518" x2="66" y2="518" stroke="var(--accent)" stroke-dasharray="4 3" marker-end="url(#m)"/><text x="72" y="513" fill="var(--dim)">18 渲染结果给用户</text>
+<!-- 19 pause -->
+<line x1="511" y1="548" x2="670" y2="548" stroke="var(--dim)" marker-end="url(#md)"/><text x="517" y="543" fill="var(--dim)">19 idle → e2b pause(省算力)/ 重连 resume</text>
+</g>
+</svg>
+</div>
+
+<h2>3 · 缺口 & 推进顺序</h2>
+<table>
+<thead><tr><th>步</th><th>交付</th><th>缺口</th></tr></thead>
+<tbody>
+<tr><td><span class="pill build">A</span></td><td><b>Phase A</b>(进行中):桌面本地 + Render-managed codex provider/auth(App Server,OAuth/api-key/base-url)</td><td>登录 UI + IPC(基础已建)</td></tr>
+<tr><td><span class="pill build">B</span></td><td>暴露 e2b 给桌面(VPN/ALB)+ <b>codex e2b 模板</b> → 桌面远端大脑(复用 E2bSandbox stdio 隧道)</td><td>G1 模板 · G4 ingress</td></tr>
+<tr><td><span class="pill build">C</span></td><td>krewhub <b>WS 会话隧道</b>(App Server 帧)+ <b>/ext 会合路由</b> → 远端大脑驱动设备浏览器</td><td>G2 · G3</td></tr>
+<tr><td><span class="pill build">D</span></td><td>移动原生外壳(WebView 原生后端 + json-render + WS + krewauth)</td><td>G5</td></tr>
+</tbody></table>
+
+<footer>
+Render 整体架构(权威)· 整合自:render-multiplatform-codex-auth · render-e2b-cost-pricing · render-krew-integrated-architecture · render-codex-harness-options<br>
+协议 = codex App Server(单选)· 复用 krew-dev testnet3 · 双平面凭证(Plane-2 永不出设备)
+</footer>
+</div></body></html>

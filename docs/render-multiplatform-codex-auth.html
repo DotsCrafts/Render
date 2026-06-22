@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Render · 多端部署 + Codex 认证架构</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#141a22; --panel2:#1b232e; --line:#28313c; --ink:#e6edf3;
+    --dim:#9aa7b4; --accent:#7c93ff; --accent2:#39d39f; --warn:#e3b341; --danger:#f0816a;
+    --p0:#39d39f; --p1:#7c93ff; --p2:#e3b341; --p3:#8b95a3;
+    --radius:12px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --panel2:#f0f3f6; --line:#d8dee4; --ink:#1c2128; --dim:#5a6673; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto; padding:32px 20px 80px; }
+  header h1 { font-size:26px; margin:0 0 6px; letter-spacing:-.01em; }
+  header .sub { color:var(--dim); font-size:14px; }
+  h2 { font-size:20px; margin:40px 0 14px; padding-top:14px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:24px 0 10px; color:var(--accent); }
+  p { margin:10px 0; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em;
+    background:var(--panel2); padding:1px 6px; border-radius:6px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; margin:14px 0; }
+  .grid { display:grid; gap:14px; }
+  @media (min-width:760px){ .grid.c2{grid-template-columns:1fr 1fr;} .grid.c3{grid-template-columns:1fr 1fr 1fr;} }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13.5px; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .pill { display:inline-block; padding:1px 9px; border-radius:999px; font-size:11.5px; font-weight:700; }
+  .p0{background:color-mix(in srgb,var(--p0) 22%,transparent);color:var(--p0);}
+  .p1{background:color-mix(in srgb,var(--p1) 22%,transparent);color:var(--p1);}
+  .p2{background:color-mix(in srgb,var(--p2) 22%,transparent);color:var(--p2);}
+  .p3{background:color-mix(in srgb,var(--p3) 26%,transparent);color:var(--p3);}
+  .tag { display:inline-block;padding:1px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;color:var(--dim);margin:2px 4px 2px 0;}
+  .lead { font-size:16px; color:var(--ink); }
+  .muted { color:var(--dim); }
+  ul.tight{ margin:8px 0; padding-left:20px; } ul.tight li{ margin:5px 0; }
+  .rec { border-left:3px solid var(--accent2); padding-left:14px; }
+  .warnbox { border-left:3px solid var(--warn); padding-left:14px; }
+  .tabs { display:flex; gap:6px; margin:10px 0 0; flex-wrap:wrap; }
+  .tabs button { background:var(--panel2); border:1px solid var(--line); color:var(--dim);
+    padding:7px 14px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; }
+  .tabs button.active { background:var(--accent); color:#06080d; border-color:var(--accent); }
+  .topo { display:none; } .topo.active { display:block; }
+  svg { width:100%; height:auto; display:block; }
+  .legend{ display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:8px; }
+  .legend span{ display:inline-flex;align-items:center;gap:6px; }
+  .dot{ width:10px;height:10px;border-radius:3px;display:inline-block; }
+  footer { margin-top:50px; padding-top:16px; border-top:1px solid var(--line); color:var(--dim); font-size:12.5px; }
+  .kbd{font-family:ui-monospace,monospace;font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Render — 多端部署 + Codex 认证架构</h1>
+  <div class="sub">mac / windows / iOS / android 部署优先级 · Codex OAuth/API-key 登录 + 可替换 base-url（含移动端）· 基于当前 Electron + agent-bridge + e2b seam 现状</div>
+</header>
+
+<div class="card rec">
+  <div class="lead">一句话结论</div>
+  <p>Render 的难点不是"再写一个客户端"，而是 <b>brain（codex）和 opencli 都是 Node 进程，移动端跑不了</b>。所以架构必须沿三条平面拆开：
+  <b>① 大脑（codex 推理）</b> · <b>② 浏览面 + 凭证（Plane-2 登录态）</b> · <b>③ 协议层</b>。桌面端三者本地同机；移动端把 ①③ 推到远端、② 留在设备上的原生 WebView。
+  幸运的是 <code>sandbox</code>（local-seatbelt / e2b）和 <code>OPENCLI_CDP_ENDPOINT</code> relay 这两个 seam <b>已经存在</b>，移动端是把它们接到远端，而不是重写。</p>
+</div>
+
+<h2>1 · 三平面模型（这是一切的地基）</h2>
+<div class="grid c3">
+  <div class="card">
+    <h3 style="color:var(--accent2)">① Brain</h3>
+    <p class="muted">codex app-server（Node）。做推理、调 opencli、产出 json-render UX。</p>
+    <p><b>桌面</b>：本地 sandbox（local-seatbelt）。<br><b>移动</b>：远端（e2b / Render cloud），手机不跑 Node。</p>
+  </div>
+  <div class="card">
+    <h3 style="color:var(--accent)">② Browser + 凭证</h3>
+    <p class="muted">浏览面 + 登录态（Plane-2）。<b>必须留在用户设备上</b>，密码/cookie 永不进 sandbox。</p>
+    <p><b>桌面</b>：Electron <code>WebContentsView</code> + <code>persist:render</code>。<br><b>移动</b>：原生 <code>WKWebView</code> / Android <code>WebView</code>。</p>
+  </div>
+  <div class="card">
+    <h3 style="color:var(--warn)">③ 协议层</h3>
+    <p class="muted"><code>@render/protocol</code> + agent-bridge + json-render。传输无关。</p>
+    <p><b>桌面</b>：进程内 IPC。<br><b>移动</b>：WebSocket（手机 ↔ 远端 brain）。同一套帧。</p>
+  </div>
+</div>
+
+<h2>2 · 拓扑：桌面 vs 移动</h2>
+<div class="tabs">
+  <button class="active" onclick="topo('desktop',this)">桌面 (mac/win/linux)</button>
+  <button onclick="topo('mobile',this)">移动 (iOS/android)</button>
+</div>
+
+<div class="topo active" id="topo-desktop">
+<div class="card">
+<svg viewBox="0 0 760 300" role="img" aria-label="桌面拓扑">
+  <rect x="6" y="6" width="748" height="288" rx="14" fill="none" stroke="var(--line)"/>
+  <text x="20" y="28" fill="var(--dim)" font-size="12">本机（一台设备，全部本地）</text>
+  <!-- electron shell -->
+  <rect x="24" y="44" width="712" height="234" rx="10" fill="var(--panel2)" stroke="var(--line)"/>
+  <text x="38" y="64" fill="var(--ink)" font-size="13" font-weight="700">Electron 外壳（Render.app）</text>
+  <!-- browser plane -->
+  <rect x="40" y="78" width="210" height="180" rx="9" fill="none" stroke="var(--accent)"/>
+  <text x="52" y="98" fill="var(--accent)" font-size="12" font-weight="700">② 浏览面 + 凭证</text>
+  <rect x="54" y="110" width="182" height="40" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="64" y="135" fill="var(--ink)" font-size="11">WebContentsView 标签 (Agent group)</text>
+  <rect x="54" y="158" width="182" height="34" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="64" y="179" fill="var(--ink)" font-size="11">persist:render（登录 cookie）</text>
+  <rect x="54" y="200" width="182" height="34" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="64" y="221" fill="var(--ink)" font-size="11">opencli daemon + bridge</text>
+  <!-- protocol -->
+  <rect x="270" y="120" width="120" height="96" rx="9" fill="none" stroke="var(--warn)"/>
+  <text x="282" y="140" fill="var(--warn)" font-size="12" font-weight="700">③ 协议</text>
+  <text x="282" y="160" fill="var(--ink)" font-size="11">IPC</text>
+  <text x="282" y="178" fill="var(--ink)" font-size="11">(进程内)</text>
+  <text x="282" y="202" fill="var(--dim)" font-size="10">json-render</text>
+  <!-- brain -->
+  <rect x="410" y="78" width="312" height="180" rx="9" fill="none" stroke="var(--accent2)"/>
+  <text x="422" y="98" fill="var(--accent2)" font-size="12" font-weight="700">① Brain（本地 sandbox）</text>
+  <rect x="424" y="110" width="284" height="44" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="436" y="130" fill="var(--ink)" font-size="11">codex app-server</text>
+  <text x="436" y="146" fill="var(--dim)" font-size="10">local-seatbelt 沙箱</text>
+  <rect x="424" y="162" width="284" height="40" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="436" y="186" fill="var(--ink)" font-size="11">CODEX_HOME: auth.json + config.toml</text>
+  <rect x="424" y="210" width="284" height="36" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="436" y="232" fill="var(--ink)" font-size="11">→ 模型 provider（base_url）</text>
+  <!-- arrows -->
+  <line x1="250" y1="168" x2="270" y2="168" stroke="var(--dim)" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="390" y1="168" x2="410" y2="168" stroke="var(--dim)" stroke-width="1.5" marker-end="url(#a)"/>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--dim)"/></marker></defs>
+</svg>
+<div class="legend">
+  <span><i class="dot" style="background:var(--accent2)"></i>① brain 本地</span>
+  <span><i class="dot" style="background:var(--accent)"></i>② 浏览/凭证 本地</span>
+  <span><i class="dot" style="background:var(--warn)"></i>③ 协议 进程内</span>
+</div>
+<p class="muted" style="margin-top:10px">现状（已实现）。Windows/Linux 基本是同一份 Electron 代码，主要是打包/签名 + 路径差异。</p>
+</div>
+</div>
+
+<div class="topo" id="topo-mobile">
+<div class="card">
+<svg viewBox="0 0 760 320" role="img" aria-label="移动拓扑">
+  <rect x="6" y="6" width="360" height="308" rx="14" fill="none" stroke="var(--line)"/>
+  <text x="20" y="28" fill="var(--dim)" font-size="12">手机（iOS / Android）</text>
+  <rect x="24" y="42" width="324" height="258" rx="10" fill="var(--panel2)" stroke="var(--line)"/>
+  <text x="38" y="62" fill="var(--ink)" font-size="13" font-weight="700">原生外壳（Swift / Kotlin / RN）</text>
+  <rect x="40" y="76" width="292" height="120" rx="9" fill="none" stroke="var(--accent)"/>
+  <text x="52" y="96" fill="var(--accent)" font-size="12" font-weight="700">② 浏览面 + 凭证（留本地）</text>
+  <rect x="54" y="108" width="264" height="36" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="64" y="130" fill="var(--ink)" font-size="11">WKWebView / Android WebView</text>
+  <rect x="54" y="150" width="264" height="36" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="64" y="172" fill="var(--ink)" font-size="11">设备 Keychain / Keystore（凭证）</text>
+  <rect x="40" y="206" width="292" height="84" rx="9" fill="none" stroke="var(--warn)"/>
+  <text x="52" y="226" fill="var(--warn)" font-size="12" font-weight="700">③ 协议 client</text>
+  <rect x="54" y="238" width="264" height="40" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="64" y="263" fill="var(--ink)" font-size="11">json-render 渲染器 + WS client</text>
+
+  <!-- cloud -->
+  <rect x="398" y="6" width="356" height="308" rx="14" fill="none" stroke="var(--line)"/>
+  <text x="412" y="28" fill="var(--dim)" font-size="12">远端（e2b / Render cloud）</text>
+  <rect x="416" y="42" width="320" height="258" rx="10" fill="var(--panel2)" stroke="var(--line)"/>
+  <rect x="430" y="60" width="292" height="100" rx="9" fill="none" stroke="var(--accent2)"/>
+  <text x="442" y="80" fill="var(--accent2)" font-size="12" font-weight="700">① Brain（远端 sandbox）</text>
+  <rect x="444" y="92" width="264" height="34" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="454" y="113" fill="var(--ink)" font-size="11">codex app-server (e2b)</text>
+  <rect x="444" y="130" width="264" height="24" rx="6" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="454" y="147" fill="var(--ink)" font-size="10.5">CODEX_HOME ← 设备发来的 auth（短时）</text>
+  <rect x="430" y="170" width="292" height="56" rx="9" fill="none" stroke="var(--accent)"/>
+  <text x="442" y="190" fill="var(--accent)" font-size="12" font-weight="700">bridge relay</text>
+  <text x="442" y="210" fill="var(--ink)" font-size="10.5">远端 opencli → 经 relay 驱动手机 WebView</text>
+  <rect x="430" y="236" width="292" height="48" rx="9" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="442" y="258" fill="var(--ink)" font-size="11">→ 模型 provider（base_url）</text>
+  <text x="442" y="275" fill="var(--dim)" font-size="10">凭证用完即弃，不落服务端盘</text>
+
+  <!-- link -->
+  <line x1="366" y1="250" x2="416" y2="195" stroke="var(--accent2)" stroke-width="2" marker-end="url(#b)"/>
+  <line x1="416" y1="205" x2="366" y2="135" stroke="var(--accent)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#b)"/>
+  <text x="360" y="305" fill="var(--dim)" font-size="10">⟷ TLS WebSocket（协议帧 + 凭证 + WebView 驱动）</text>
+  <defs><marker id="b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--accent)"/></marker></defs>
+</svg>
+<div class="legend">
+  <span><i class="dot" style="background:var(--accent2)"></i>① brain 远端</span>
+  <span><i class="dot" style="background:var(--accent)"></i>② 浏览/凭证 留手机</span>
+  <span><i class="dot" style="background:var(--warn)"></i>③ 协议 over WS</span>
+</div>
+<div class="warnbox" style="margin-top:12px">
+  <b>移动端最硬的两块：</b>
+  <ul class="tight">
+    <li><b>opencli bridge</b>：手机不能跑 daemon。远端 opencli 想驱动"手机里的 WebView"需要把 bridge 的 <code>/ext</code> 协议反向接到手机 WebView 的 CDP-like 桥（WKWebView 用 <code>WKUserContentController</code>/JS 注入，Android 用 <code>WebViewCompat</code> + DevTools 协议）。这是移动端工作量的大头。</li>
+    <li><b>Plane-2 登录态</b>：必须在手机本地 WebView 完成（同桌面的"在 Render 自己标签里登录"），cookie 留 Keystore/WebView 数据区，<b>永不发往远端 brain</b>。</li>
+  </ul>
+</div>
+</div>
+</div>
+
+<h2>3 · 部署优先级</h2>
+<table>
+  <thead><tr><th>优先级</th><th>平台</th><th>路径</th><th>主要工作</th></tr></thead>
+  <tbody>
+    <tr><td><span class="pill p0">P0</span></td><td><b>macOS</b></td><td>现有 Electron</td><td>固化当前架构（tab-group/登录/profile-bind 已完成）；签名 + 公证 + 自动更新。</td></tr>
+    <tr><td><span class="pill p0">P0</span></td><td><b>Windows</b></td><td>同份 Electron</td><td>≈免费拿下。打包(NSIS/MSIX)+签名；验证 CDP 端口、keychain→<code>safeStorage</code>(DPAPI)、opencli daemon 路径。</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td><b>核心解耦</b></td><td>重构（非平台）</td><td>把"①brain ②浏览 ③协议"三 seam 抽成传输无关接口（local IPC ↔ WS 二选一）。这是移动端的前置条件，桌面端也受益。</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>Linux</td><td>同份 Electron</td><td>AppImage/deb；近免费，顺带产物。</td></tr>
+    <tr><td><span class="pill p2">P2</span></td><td><b>iOS</b></td><td>原生薄客户端 + 远端 brain</td><td>WKWebView 浏览面 + json-render 渲染器 + WS client；远端 codex；WebView↔bridge relay；OAuth via ASWebAuthenticationSession。</td></tr>
+    <tr><td><span class="pill p2">P2</span></td><td><b>Android</b></td><td>原生薄客户端 + 远端 brain</td><td>同 iOS，WebView + Custom Tabs/App Links 做 OAuth；Keystore 存凭证。</td></tr>
+    <tr><td><span class="pill p3">P3</span></td><td>云端 brain 托管</td><td>Render cloud</td><td>给"不想自带 e2b key"的移动用户提供托管 brain + 凭证保险库。</td></tr>
+  </tbody>
+</table>
+<p class="muted">原则：<b>桌面先吃饱（P0），再把解耦做实（P1），移动端才不是重写而是接 seam（P2）。</b> 移动端不要在解耦完成前硬上。</p>
+
+<h3>移动端技术栈选型</h3>
+<table>
+  <thead><tr><th>方案</th><th>优</th><th>劣</th><th>评估</th></tr></thead>
+  <tbody>
+    <tr><td><b>原生 Swift + Kotlin</b></td><td>WebView/Keychain/OAuth/后台 最可控；Plane-2 安全性最高</td><td>两套代码</td><td class="rec"><b>推荐</b>。浏览面+凭证是核心且平台差异大，值得原生。UI 壳薄（大多是 json-render 渲染器）。</td></tr>
+    <tr><td>React Native</td><td>共享渲染器/协议 client；JS 与现有栈同源</td><td>WebView 深度驱动(CDP桥)需原生模块；OAuth 仍要原生</td><td>次选。若想最大化复用 json-render(TS) 渲染器可考虑。</td></tr>
+    <tr><td>Capacitor / Flutter</td><td>快</td><td>WebView 作为"被 agent 驱动的浏览面"控制力不足；relay 桥更别扭</td><td class="muted">不建议——和"Render 是浏览器"内核冲突。</td></tr>
+  </tbody>
+</table>
+
+<h2>4 · Codex 认证：OAuth / API-key / base-url</h2>
+<p>现状：codex 读 <code>~/.codex/auth.json</code>（你的是 <code>OPENAI_API_KEY</code>）+ <code>config.toml</code>（你已用自定义 <code>base_url=api.ai.ifunk.cn</code>, <code>wire_api=responses</code>）。Render 现在只是把它们拷进临时 <code>CODEX_HOME</code>。需求 = 把这套变成 <b>Render 里一等的登录/设置</b>，加 OAuth，并跨到移动端。</p>
+
+<h3>三种认证模式（统一收敛到 codex 的 auth.json + config.toml）</h3>
+<table>
+  <thead><tr><th>模式</th><th>用户输入</th><th>落到哪</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><b>API Key</b></td><td>粘贴 key</td><td><code>auth.json: {OPENAI_API_KEY}</code></td><td>最简单。你当前就是这个。</td></tr>
+    <tr><td><b>OAuth</b></td><td>浏览器授权登录</td><td><code>auth.json</code>: token + refresh</td><td>ChatGPT 式 OAuth（codex 已支持 chatgpt token 形态）；需做 PKCE + 刷新。</td></tr>
+    <tr><td><b>Base-URL 替换</b></td><td>endpoint + wire_api + 鉴权方式</td><td><code>config.toml [model_providers.X]</code></td><td>自托管/代理/三方兼容端点。与上面两种<b>正交</b>（任意 provider 都可配 key 或 oauth）。</td></tr>
+  </tbody>
+</table>
+
+<h3>设置模型（Render 一等公民）</h3>
+<div class="card">
+<p>新增一个 <b>Provider 设置</b>面（json-render 表单即可，复用现有 UX surface）：</p>
+<ul class="tight">
+  <li><span class="tag">Provider 名</span><span class="tag">Base URL</span><span class="tag">wire_api: chat | responses</span><span class="tag">认证: api-key | oauth</span></li>
+  <li>提交 → Render 主进程把它写进会话级 <code>CODEX_HOME</code> 的 <code>config.toml</code> + <code>auth.json</code>（沿用现有 <code>prepareCodexHome</code>，从"拷用户的"升级为"按 Render 配置生成"）。</li>
+  <li>多 provider 预设 + 一键切换（你在 ifunk / 官方 / 自托管间切）。</li>
+</ul>
+</div>
+
+<h3>凭证存哪（按平台）—— 安全是红线</h3>
+<table>
+  <thead><tr><th>平台</th><th>静态存储</th><th>注入 brain 的方式</th></tr></thead>
+  <tbody>
+    <tr><td>macOS</td><td>Keychain / Electron <code>safeStorage</code></td><td>会话启动时解密 → 写入临时 CODEX_HOME（本地 sandbox）→ 用完清理</td></tr>
+    <tr><td>Windows</td><td><code>safeStorage</code>(DPAPI)</td><td>同上</td></tr>
+    <tr><td>iOS</td><td>Keychain</td><td>会话握手时经 TLS 发给<b>远端</b> brain 的临时 CODEX_HOME，<b>不落服务端磁盘</b>、随沙箱销毁</td></tr>
+    <tr><td>Android</td><td>Keystore / EncryptedSharedPreferences</td><td>同 iOS</td></tr>
+  </tbody>
+</table>
+<div class="warnbox">
+  <b>移动端凭证的两种托管选择（需你拍板）：</b>
+  <ul class="tight">
+    <li><b>BYO-key（自带）</b>：key/token 只存手机 Keychain，每次会话经 TLS 临时发给远端 brain，服务端不持久化。最简单、最安全、零信任服务端。<b>← 推荐起步</b>。</li>
+    <li><b>Render-brokered</b>：Render 后端做 OAuth + token 保险库，手机只认证到 Render。体验顺滑但 Render 成了凭证托管方（合规/信任成本）。留给 P3。</li>
+  </ul>
+</div>
+
+<h3>OAuth 在移动端怎么跑</h3>
+<div class="grid c2">
+  <div class="card">
+    <h3 style="margin-top:0">iOS</h3>
+    <p class="muted"><code>ASWebAuthenticationSession</code> + PKCE，<code>render://oauth-callback</code> 深链回跳，token 存 Keychain。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Android</h3>
+    <p class="muted">Chrome Custom Tabs + App Links + PKCE，深链回 App，token 存 Keystore。</p>
+  </div>
+</div>
+<p class="muted">桌面端 OAuth 走系统浏览器或 Render 自己的标签（<code>persist:render</code>），回跳 localhost loopback。注意：codex 自带的 <code>preferred_auth_method</code> 与自定义 <code>base_url</code> 同用时，OAuth 端点需 provider 支持——<b>第三方兼容端点常常只支持 api-key</b>，OAuth 主要对官方/支持 OIDC 的 provider 有意义。</p>
+
+<h2>5 · 推进顺序（建议）</h2>
+<table>
+  <thead><tr><th>阶段</th><th>交付</th><th>依赖</th></tr></thead>
+  <tbody>
+    <tr><td><span class="pill p0">A</span></td><td>Codex Provider 设置面（API-key + base-url + wire_api，多预设切换）；<code>prepareCodexHome</code> 从配置生成；凭证进 <code>safeStorage</code>。<b>桌面立即可用、价值最高、风险最低。</b></td><td>无（纯桌面）</td></tr>
+    <tr><td><span class="pill p0">B</span></td><td>Windows 打包 + 签名 + 自动更新；A 在 Win 上验证。</td><td>A</td></tr>
+    <tr><td><span class="pill p1">C</span></td><td>桌面 OAuth 模式（loopback 回跳，token 刷新）。</td><td>A</td></tr>
+    <tr><td><span class="pill p1">D</span></td><td><b>三 seam 解耦</b>：brain/浏览/协议 抽成传输无关接口，桌面用 IPC、可切 WS。</td><td>A</td></tr>
+    <tr><td><span class="pill p2">E</span></td><td>iOS 薄客户端：WebView 浏览面 + json-render 渲染器 + WS → 远端 brain；BYO-key 凭证；ASWebAuthenticationSession OAuth。</td><td>C, D</td></tr>
+    <tr><td><span class="pill p2">F</span></td><td>Android 对等。</td><td>E</td></tr>
+    <tr><td><span class="pill p3">G</span></td><td>Render cloud 托管 brain + 凭证保险库（Render-brokered 模式）。</td><td>E/F</td></tr>
+  </tbody>
+</table>
+
+<h2>6 · 需要你拍板的分叉</h2>
+<div class="grid c2">
+  <div class="card"><b>① 移动栈</b><br><span class="muted">原生 Swift+Kotlin（推荐，控制力）vs React Native（复用 TS 渲染器）</span></div>
+  <div class="card"><b>② 移动 brain 托管</b><br><span class="muted">BYO e2b key（推荐起步）vs Render cloud 托管</span></div>
+  <div class="card"><b>③ 移动凭证</b><br><span class="muted">BYO-key 设备保管（推荐）vs Render-brokered 保险库</span></div>
+  <div class="card"><b>④ 认证默认</b><br><span class="muted">API-key 优先（你现状 + 兼容三方端点）vs OAuth 优先</span></div>
+</div>
+
+<footer>
+  Render 架构规划 · 基于 <code>feat/opencli-bridge</code> 现状（Electron 33 / agent-bridge / e2b sandbox seam / 自定义 base_url）<br>
+  关联：docs/render-architecture-reeval.html · render-option-a-roadmap.html · 已落地 commits 69e5fc2 / 5bad9bd / 233b6a9 / b444448
+</footer>
+</div>
+<script>
+  function topo(which, btn){
+    document.querySelectorAll('.topo').forEach(t=>t.classList.remove('active'));
+    document.getElementById('topo-'+which).classList.add('active');
+    btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+</script>
+</body>
+</html>
