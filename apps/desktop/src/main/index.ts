@@ -71,6 +71,37 @@ function wire(win: BrowserWindow): void {
 
   const broker = registerIpc({ chrome: win.webContents, tabs, agent, humanHand });
 
+  // Guard the chrome shell: a link clicked inside the agent panel must NEVER
+  // replace the app UI. Any top-level navigation away from the renderer origin
+  // is cancelled and opened as a real Render browsing tab instead.
+  const chromeOrigin = (() => {
+    const u = process.env.ELECTRON_RENDERER_URL;
+    if (!u) return null;
+    try {
+      return new URL(u).origin;
+    } catch {
+      return null;
+    }
+  })();
+  const isChromeNav = (url: string): boolean => {
+    if (url.startsWith('file://') || url === 'about:blank') return true;
+    if (!chromeOrigin) return false;
+    try {
+      return new URL(url).origin === chromeOrigin;
+    } catch {
+      return false;
+    }
+  };
+  win.webContents.on('will-navigate', (e, url) => {
+    if (isChromeNav(url)) return; // allow the SPA's own loads + HMR
+    e.preventDefault();
+    void tabs.create(url); // external link → new active browsing tab
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url && url !== 'about:blank') void tabs.create(url);
+    return { action: 'deny' };
+  });
+
   // keep page views inset correctly as the window resizes
   win.on('resize', () => tabs.relayout());
 
