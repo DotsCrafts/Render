@@ -155,6 +155,7 @@ function wire(win: BrowserWindow): void {
     tabs.dispose();
     void humanHand.dispose();
     void opencliBridge?.dispose();
+    void codexProvider.dispose();
   });
 }
 

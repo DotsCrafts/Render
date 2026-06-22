@@ -54,8 +54,14 @@ import type {
   CodexProviderConfig as ProviderConfig,
   CodexProviderStatus as ProviderStatus,
 } from '@render/protocol';
+import { createCodexEgressProxy, type CodexEgressProxy } from './codex-egress-proxy.js';
 
 export type { ProviderConfig, ProviderStatus };
+
+/** codex's built-in OpenAI provider base URL (upstream when no custom base_url). */
+const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+/** placeholder key codex carries to the loopback proxy (proxy injects the real one). */
+const PROXY_PLACEHOLDER_KEY = 'sk-render-egress-proxy-placeholder';
 
 const DEFAULT_PROVIDER: ProviderConfig = {
   name: 'OpenAI',
@@ -141,6 +147,18 @@ function configToml(p: ProviderConfig): string {
   ].join('\n');
 }
 
+/** Point codex at the loopback egress proxy instead of the real upstream. */
+function proxyConfigToml(wireApi: string, proxyUrl: string): string {
+  return [
+    'model_provider = "render-proxy"',
+    '[model_providers.render-proxy]',
+    'name = "render-proxy"',
+    `base_url = "${proxyUrl}"`,
+    `wire_api = "${wireApi}"`,
+    '',
+  ].join('\n');
+}
+
 // ── public API ──────────────────────────────────────────────────────────────
 
 export interface CodexProvider {
@@ -162,10 +180,22 @@ export interface CodexProvider {
    * falls back to the legacy copy-from-~/.codex path).
    */
   materializeCodexHome(): Promise<{ path: string; cleanup: () => Promise<void> } | null>;
+  /** Tear down the egress proxy (if any). Call on app shutdown. */
+  dispose(): Promise<void>;
 }
 
 export function createCodexProvider(): CodexProvider {
   sweepStaleHomes(); // clear plaintext-key leftovers from prior runs
+
+  // Loopback egress proxy (lazy): in API-key mode codex talks to this instead of
+  // the real upstream, so the real key never lands in CODEX_HOME / the brain.
+  // Set RENDER_CODEX_EGRESS_PROXY=0 to fall back to the in-CODEX_HOME key.
+  const proxyEnabled = process.env.RENDER_CODEX_EGRESS_PROXY !== '0';
+  let proxy: CodexEgressProxy | null = null;
+  const ensureProxy = async (): Promise<CodexEgressProxy> => {
+    if (!proxy) proxy = await createCodexEgressProxy();
+    return proxy;
+  };
 
   const getStatus = (): ProviderStatus => {
     const provider = readProvider();
@@ -270,19 +300,44 @@ export function createCodexProvider(): CodexProvider {
     if (!secret) return null; // no Render credential → caller uses legacy path
     const provider = readProvider();
     const path = await mkdtemp(join(tmpdir(), HOME_PREFIX));
-    // 0600: the plaintext credential must not be group/world-readable.
-    await writeFile(join(path, 'auth.json'), secret, { mode: 0o600 });
-    // Merge Render's provider block with any non-hook config the user already has.
+
+    // The stored auth blob decides the mode: { OPENAI_API_KEY } vs { tokens }.
+    let realKey = '';
+    try {
+      const blob = JSON.parse(secret) as { OPENAI_API_KEY?: string };
+      if (typeof blob.OPENAI_API_KEY === 'string') realKey = blob.OPENAI_API_KEY;
+    } catch {
+      /* not JSON → treat as opaque, written verbatim below */
+    }
+
+    let providerToml: string;
+    let authJson: string;
+    if (realKey && proxyEnabled) {
+      // API-KEY MODE → route codex through the loopback egress proxy. The real
+      // key stays in main-process memory; codex's CODEX_HOME gets a placeholder
+      // and a base_url pointing at 127.0.0.1, so the brain never sees the key.
+      const upstream = provider.baseUrl?.trim() || OPENAI_DEFAULT_BASE_URL;
+      const p = await ensureProxy();
+      p.setTarget({ upstream, bearer: realKey });
+      providerToml = proxyConfigToml(provider.wireApi, p.url);
+      authJson = JSON.stringify({ OPENAI_API_KEY: PROXY_PLACEHOLDER_KEY });
+    } else {
+      // OAuth (codex refreshes its own tokens) or proxy disabled → codex's own auth.
+      providerToml = configToml(provider);
+      authJson = secret;
+    }
+
+    // 0600: even the placeholder/auth blob is owner-only.
+    await writeFile(join(path, 'auth.json'), authJson, { mode: 0o600 });
+    // Inherit the user's non-hook, non-provider settings (Render owns the provider).
     let base = '';
     try {
       const raw = await readFile(join(homedir(), '.codex', 'config.toml'), 'utf8');
-      // strip hooks (protocol-level HITL) AND the old provider block (Render owns it)
       base = stripProviderConfig(stripHookSections(raw));
     } catch {
       /* none — fine */
     }
-    const toml = configToml(provider);
-    const merged = toml ? `${toml}\n${base}` : base;
+    const merged = providerToml ? `${providerToml}\n${base}` : base;
     if (merged.trim()) await writeFile(join(path, 'config.toml'), merged);
     return {
       path,
@@ -290,5 +345,12 @@ export function createCodexProvider(): CodexProvider {
     };
   };
 
-  return { getStatus, setProvider, loginWithApiKey, loginWithOAuth, logout, materializeCodexHome };
+  const dispose = async (): Promise<void> => {
+    if (proxy) {
+      await proxy.dispose();
+      proxy = null;
+    }
+  };
+
+  return { getStatus, setProvider, loginWithApiKey, loginWithOAuth, logout, materializeCodexHome, dispose };
 }
