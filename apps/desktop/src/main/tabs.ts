@@ -12,7 +12,8 @@ import { WebContentsView, type BaseWindow, type WebContents } from 'electron';
 import type { TabState } from '@render/protocol';
 import { contentBounds, type Bounds } from './layout.js';
 
-export const HOME_URL = 'https://example.com';
+export const HOME_URL = 'about:blank';
+const BLANK_URLS = new Set(['', 'about:blank', HOME_URL]);
 
 interface Tab {
   id: string;
@@ -57,6 +58,21 @@ export class TabManager {
     if (opts.activate ?? true) this.activate(id);
     else this.emit();
     return id;
+  }
+
+  /**
+   * Open a URL like a traditional browser: if the active tab is a blank
+   * new-tab, navigate it in place (replace); otherwise open a fresh active tab.
+   * Used by the chrome-shell nav guard (agent-panel links, window.open).
+   */
+  openUrl(url: string): string {
+    const active = this.activeId ? this.tabs.get(this.activeId) : undefined;
+    if (active && BLANK_URLS.has(active.view.webContents.getURL())) {
+      void this.navigate(active.id, url);
+      this.activate(active.id);
+      return active.id;
+    }
+    return this.create(url);
   }
 
   close(id: string): void {

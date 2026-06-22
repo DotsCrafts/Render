@@ -95,20 +95,21 @@ function wire(win: BrowserWindow): void {
   win.webContents.on('will-navigate', (e, url) => {
     if (isChromeNav(url)) return; // allow the SPA's own loads + HMR
     e.preventDefault();
-    void tabs.create(url); // external link → new active browsing tab
+    tabs.openUrl(url); // replace a blank tab, else open a new one (traditional)
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url && url !== 'about:blank') void tabs.create(url);
+    if (url && url !== 'about:blank') void tabs.create(url); // window.open → new tab
     return { action: 'deny' };
   });
 
   // keep page views inset correctly as the window resizes
   win.on('resize', () => tabs.relayout());
 
-  // open the first real browsing tab once the chrome is ready
+  // open the first (blank) browsing tab once the chrome is ready
   win.webContents.once('did-finish-load', () => {
     if (tabs.activeTabId === null) tabs.create();
-    void runCdpSelfTest(humanHand, tabs);
+    // CDP self-test is a dev diagnostic (opens example.com) — off by default.
+    if (process.env.RENDER_DEBUG_CDP) void runCdpSelfTest(humanHand, tabs);
   });
 
   win.on('closed', () => {
