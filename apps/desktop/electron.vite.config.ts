@@ -15,6 +15,7 @@ const bundleWorkspace = {
     '@render/sandbox',
     '@render/agent-bridge',
     '@render/opencli-router',
+    '@render/opencli-bridge',
     '@render/ux-render',
   ],
 };
