@@ -34,6 +34,7 @@ import { parseOpencliCommand } from './opencli-command.js';
 import { opencliResultToUx } from './opencli-to-ux.js';
 import { uxResultToCodexReply } from './ux-reply.js';
 import { RENDER_AGENTS_MD, writeAgentsMd } from './agent-instructions.js';
+import { answerToUxMessage } from './answer-to-ux.js';
 
 export interface AgentRuntime {
   submit(text: string): Promise<{ turnId: string }>;
@@ -100,6 +101,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       ...(deps.logRaw ? { logRaw: true } : {}),
       ...(env ? { env } : {}),
     });
+    // accumulate streamed agentMessage text per item so the final answer can be
+    // converted into a structured ux render card (see answer-to-ux.ts).
+    const answerText = new Map<string, string>();
     s.onAgentEvent((event) => {
       if (event.kind === 'ux' && event.message.blocking) {
         const requestId = event.message.origin?.requestId;
@@ -107,6 +111,30 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           pendingHitl.set(event.message.id, { requestId, kind: event.message.kind });
         }
       }
+
+      // The agent's prose answer must NOT show as raw feed text — it becomes a
+      // json-render card. Suppress agentMessage deltas; on completion, emit a
+      // ux render (parsed structured spec, or prose fallback as the card body).
+      if (event.kind === 'delta') {
+        if (event.itemId) {
+          answerText.set(event.itemId, (answerText.get(event.itemId) ?? '') + event.text);
+        }
+        return;
+      }
+      if (event.kind === 'item' && event.item.type === 'agentMessage') {
+        if (event.phase === 'completed') {
+          const id = typeof event.item.id === 'string' ? event.item.id : undefined;
+          const text =
+            (typeof event.item.text === 'string' && event.item.text) ||
+            (id ? (answerText.get(id) ?? '') : '');
+          if (id) answerText.delete(id);
+          if (text.trim()) {
+            deps.emit({ kind: 'ux', message: answerToUxMessage(text, `ux-ans-${++uxSeq}`, deps.now()) });
+          }
+        }
+        return; // never forward the raw agentMessage item to the feed
+      }
+
       deps.emit(event);
     });
     return s;

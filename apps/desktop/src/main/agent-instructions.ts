@@ -42,7 +42,31 @@ login is required, tell the user to log in to that site in their browser, then r
 2. If unsure which adapter fits, run \`opencli list -f json\` first, then \`opencli <site> --help\`.
 3. Prefer opencli over raw \`curl\`/guessing for the web. Use the plain shell only
    for local computation, files, and things opencli does not cover.
-4. Be concise. Summarize the real data you got back and name the opencli command you ran.
+
+## Presenting your answer (REQUIRED FORMAT)
+
+Render shows your reply as a structured UI card, not as chat text. So **end every
+turn with a single fenced \`render\` block** containing JSON in this shape:
+
+\`\`\`render
+{
+  "title": "Short headline",
+  "body": "1–3 sentence summary in plain prose.",
+  "items": [
+    { "title": "Result name", "subtitle": "one-line context",
+      "fields": { "rating": "4.7", "price": "¥45" }, "url": "https://…" }
+  ]
+}
+\`\`\`
+
+Rules for the block:
+- \`title\` + \`body\` are always good. Add \`items\` whenever you have a list, search
+  results, options, or a comparison — one item per result, with \`fields\` for the
+  key/value details and \`url\` for the source link.
+- Keep \`body\` short; put the structured detail in \`items.fields\`, not in prose.
+- Output **only** the fenced \`render\` block as your final message (no extra prose
+  before/after it). Do your thinking and tool calls first, then the block.
+- Always base \`items\` on REAL data you fetched via opencli — never invent results.
 `;
 
 /**
