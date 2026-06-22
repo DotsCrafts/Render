@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { WebSocketServer } from 'ws';
 import { createSingleLeaseProvider } from '../src/lease.ts';
-import { dispatch } from '../src/actions.ts';
+import { dispatch, CDP_ALLOWLIST } from '../src/actions.ts';
 import { ok, fail, RENDER_CONTEXT_ID, SYSTEM_CHROME_CONTEXT_ID } from '../src/protocol.ts';
 import { createOpencliBridge } from '../src/bridge.ts';
 import { StalePageError } from '../src/types.ts';
@@ -45,6 +45,10 @@ function fakeTarget(id, scripted = {}) {
         if (expr === 'location.href') return { result: { value: scripted.url ?? 'https://x' } };
         return { result: { value: scripted.exec ?? 'ok' } };
       }
+      if (method === 'Page.captureScreenshot') return { data: scripted.screenshot ?? 'QkFTRTY0' };
+      if (method === 'Network.getCookies') return { cookies: scripted.cookies ?? [] };
+      if (method === 'Page.getFrameTree') return scripted.frameTree ?? { frameTree: { frame: { id: 'root', url: 'https://x' } } };
+      if (scripted.cdp && scripted.cdp[method] !== undefined) return scripted.cdp[method];
       return {};
     },
     on: (event, cb) => {
@@ -105,13 +109,170 @@ test('close-window disposes the lease; stubs fail loudly; unknown action fails',
   assert.deepEqual(close, ok('c1', { closed: true }));
   assert.equal(target.isAlive(), false);
 
-  const stub = await dispatch(provider, { id: 's1', action: 'screenshot' });
-  assert.equal(stub.ok, false);
-  assert.equal(stub.errorCode, 'not_implemented');
-
   const unknown = await dispatch(provider, { id: 'u1', action: 'frobnicate' });
   assert.equal(unknown.ok, false);
   assert.equal(unknown.errorCode, 'unknown_action');
+});
+
+test('M3 multi-lease actions (tabs/network-capture/wait-download) still fail loudly', async () => {
+  const provider = createSingleLeaseProvider({ createTarget: async () => fakeTarget('t1') });
+  for (const action of ['tabs', 'network-capture-start', 'network-capture-read', 'wait-download']) {
+    const r = await dispatch(provider, { id: action, action, op: 'list' });
+    assert.equal(r.ok, false, `${action} must fail loudly`);
+    assert.equal(r.errorCode, 'not_implemented');
+  }
+});
+
+// ── M2: cdp / cookies / screenshot / frames ──────────────────────────────────
+
+test('cdp: allowlisted method forwards to target.send and returns the raw result, page-scoped', async () => {
+  const doc = { root: { nodeId: 1, nodeName: '#document' } };
+  const target = fakeTarget('PAGE1', { cdp: { 'DOM.getDocument': doc } });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+
+  const r = await dispatch(provider, {
+    id: 'c1',
+    action: 'cdp',
+    page: 'PAGE1',
+    cdpMethod: 'DOM.getDocument',
+    cdpParams: { depth: -1 },
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data, doc);
+  assert.equal(r.page, 'PAGE1');
+  const call = target.sent.find((s) => s.method === 'DOM.getDocument');
+  assert.deepEqual(call.params, { depth: -1 });
+});
+
+test('cdp: method OUTSIDE the allowlist is rejected and never reaches the target', async () => {
+  const target = fakeTarget('PAGE1');
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+
+  for (const method of ['Page.navigate', 'Network.enable', 'Browser.close', 'Target.createTarget']) {
+    const r = await dispatch(provider, { id: 'x', action: 'cdp', page: 'PAGE1', cdpMethod: method });
+    assert.equal(r.ok, false, `${method} must be rejected`);
+    assert.equal(r.errorCode, 'cdp_not_permitted');
+  }
+  // none of the rejected methods were ever forwarded to the CDP target
+  assert.equal(target.sent.length, 0);
+  // every allowlisted method is exposed
+  assert.ok(CDP_ALLOWLIST.has('Page.captureScreenshot'));
+  assert.ok(CDP_ALLOWLIST.has('Page.getFrameTree'));
+  assert.ok(!CDP_ALLOWLIST.has('Page.navigate'));
+});
+
+test('cdp: missing cdpMethod fails loudly', async () => {
+  const provider = createSingleLeaseProvider({ createTarget: async () => fakeTarget('PAGE1') });
+  const r = await dispatch(provider, { id: 'x', action: 'cdp', cdpMethod: '' });
+  assert.equal(r.ok, false);
+  assert.equal(r.errorCode, 'missing_cdp_method');
+});
+
+test('cdp: strips opencli frame-routing params before forwarding', async () => {
+  const target = fakeTarget('PAGE1', { cdp: { 'DOM.getDocument': {} } });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+  await dispatch(provider, {
+    id: 'c1',
+    action: 'cdp',
+    page: 'PAGE1',
+    cdpMethod: 'DOM.getDocument',
+    cdpParams: { depth: -1, frameId: 'f2', sessionId: 'target', targetUrl: 'https://child' },
+  });
+  const call = target.sent.find((s) => s.method === 'DOM.getDocument');
+  assert.deepEqual(call.params, { depth: -1 }, 'frame routing keys must be stripped');
+});
+
+test('cookies: maps Network.getCookies → extension wire shape; ARRAY, NO page field', async () => {
+  const cookies = [
+    { name: 'sid', value: 'abc', domain: '.example.com', path: '/', secure: true, httpOnly: true, expires: 1893456000 },
+    { name: 'tmp', value: 'z', domain: 'example.com', path: '/', secure: false, httpOnly: false, expires: -1 },
+    { name: 'other', value: 'q', domain: 'other.com', path: '/', secure: false, httpOnly: false, expires: -1 },
+  ];
+  const target = fakeTarget('PAGE1', { cookies });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+
+  const r = await dispatch(provider, { id: 'k1', action: 'cookies', page: 'PAGE1', domain: 'example.com' });
+  assert.equal(r.ok, true);
+  assert.equal('page' in r, false, 'cookies Result must NOT carry a page field');
+  assert.ok(Array.isArray(r.data));
+  // domain-scoped: other.com filtered out
+  assert.deepEqual(r.data.map((c) => c.name), ['sid', 'tmp']);
+  // session cookie (expires <= 0) drops expirationDate; persistent maps expires→expirationDate
+  assert.deepEqual(r.data[0], {
+    name: 'sid', value: 'abc', domain: '.example.com', path: '/', secure: true, httpOnly: true, expirationDate: 1893456000,
+  });
+  assert.equal('expirationDate' in r.data[1], false);
+});
+
+test('cookies: scope guard — no domain AND no url is rejected (never dump all cookies)', async () => {
+  const target = fakeTarget('PAGE1', { cookies: [{ name: 'a', value: '1', domain: 'x', path: '/', secure: false, httpOnly: false }] });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+  const r = await dispatch(provider, { id: 'k1', action: 'cookies', page: 'PAGE1' });
+  assert.equal(r.ok, false);
+  assert.equal(r.errorCode, 'cookie_scope_required');
+  assert.equal(target.sent.length, 0, 'must not even query cookies without a scope');
+});
+
+test('cookies: url scope passes urls:[url] to Network.getCookies', async () => {
+  const target = fakeTarget('PAGE1', { cookies: [] });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+  await dispatch(provider, { id: 'k1', action: 'cookies', page: 'PAGE1', url: 'https://example.com/p' });
+  const call = target.sent.find((s) => s.method === 'Network.getCookies');
+  assert.deepEqual(call.params, { urls: ['https://example.com/p'] });
+});
+
+test('screenshot: Page.captureScreenshot → base64 STRING in data, page-scoped; jpeg clamps quality', async () => {
+  const target = fakeTarget('PAGE1', { screenshot: 'aGVsbG8=' });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+
+  const png = await dispatch(provider, { id: 's1', action: 'screenshot', page: 'PAGE1' });
+  assert.equal(png.ok, true);
+  assert.equal(typeof png.data, 'string', 'data must be the raw base64 string (client does const b64 = data)');
+  assert.equal(png.data, 'aGVsbG8=');
+  assert.equal(png.page, 'PAGE1');
+  assert.deepEqual(target.sent.find((s) => s.method === 'Page.captureScreenshot').params, { format: 'png' });
+
+  const jpeg = await dispatch(provider, { id: 's2', action: 'screenshot', page: 'PAGE1', format: 'jpeg', quality: 250 });
+  assert.equal(jpeg.ok, true);
+  const shot = target.sent.filter((s) => s.method === 'Page.captureScreenshot').at(-1);
+  assert.deepEqual(shot.params, { format: 'jpeg', quality: 100 }, 'quality clamped to 0..100');
+});
+
+test('frames: Page.getFrameTree → cross-origin enumeration ARRAY (same-origin recursed through), page-scoped', async () => {
+  // root https://a.com → child https://a.com/inner (same origin, NOT emitted, recursed)
+  //                          └ grandchild https://b.com (cross-origin, emitted)
+  //                    → child https://c.com (cross-origin, emitted)
+  const frameTree = {
+    frameTree: {
+      frame: { id: 'root', url: 'https://a.com/' },
+      childFrames: [
+        {
+          frame: { id: 'f-same', url: 'https://a.com/inner' },
+          childFrames: [{ frame: { id: 'f-b', url: 'https://b.com/', name: 'bframe' } }],
+        },
+        { frame: { id: 'f-c', url: 'https://c.com/' } },
+      ],
+    },
+  };
+  const target = fakeTarget('PAGE1', { frameTree });
+  const provider = createSingleLeaseProvider({ createTarget: async () => target });
+  await provider.acquire();
+
+  const r = await dispatch(provider, { id: 'fr1', action: 'frames', page: 'PAGE1' });
+  assert.equal(r.ok, true);
+  assert.equal(r.page, 'PAGE1');
+  assert.ok(Array.isArray(r.data));
+  assert.deepEqual(r.data, [
+    { index: 0, frameId: 'f-b', url: 'https://b.com/', name: 'bframe' },
+    { index: 1, frameId: 'f-c', url: 'https://c.com/', name: '' },
+  ]);
 });
 
 test('protocol envelopes are immutable shapes', () => {

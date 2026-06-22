@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test": "node test/run.mjs",
-    "proof": "node harness/run-proof.mjs"
+    "proof": "node harness/run-proof.mjs",
+    "proof:m2": "node harness/run-proof-m2.mjs"
   },
   "dependencies": {
     "@render/protocol": "workspace:*",
