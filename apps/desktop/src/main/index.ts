@@ -16,8 +16,14 @@ import { TabManager } from './tabs.js';
 import { createAgentRuntime } from './agent-runtime.js';
 import { registerIpc } from './ipc.js';
 import { runCdpSelfTest } from './cdp-selftest.js';
+import { enableRenderCdp } from './cdp-port.js';
+import { registerRenderOpencliApp } from './opencli-render-app.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
+
+// Open Render's OWN CDP endpoint (loopback) BEFORE app startup so opencli can
+// drive Render's embedded Chromium over CDP instead of system Chrome.
+const renderCdp = enableRenderCdp();
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -63,9 +69,11 @@ function wire(win: BrowserWindow): void {
     emit: (event) => broker.emitAgent(event),
     sandbox: selectSandbox(),
     router,
-    // give the BRAIN the human-hand relay so its own opencli browser-adapter
-    // calls drive the user's real logged-in Chromium (not a headless sandbox).
-    cdpEndpoint: () => humanHand.cdpEndpoint(),
+    // give the BRAIN a CDP endpoint for its own opencli browser-adapter calls.
+    // Locally, that's Render's OWN embedded Chromium (--remote-debugging-port);
+    // `opencli render <cmd>` then drives Render's tabs, never system Chrome. If
+    // the port is disabled, fall back to the human-hand relay (remote/e2b seam).
+    cdpEndpoint: async () => (renderCdp.enabled ? renderCdp.endpoint : humanHand.cdpEndpoint()),
     // the `render-open` tool: open a page in Render's OWN browser, not system Chrome.
     // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange.
     openTab: (url) => tabs.openUrl(url),
@@ -125,6 +133,14 @@ function wire(win: BrowserWindow): void {
 }
 
 app.whenReady().then(() => {
+  // Register Render as an opencli Electron app so `opencli render <cmd>` routes
+  // to Render's embedded Chromium over CDP. Best-effort, idempotent, additive.
+  if (renderCdp.enabled) {
+    void registerRenderOpencliApp({ port: renderCdp.port }).then((r) => {
+      if (!r.registered) console.warn('[render-cdp] opencli app registration skipped:', r.note);
+    });
+  }
+
   const win = createWindow();
   wire(win);
 

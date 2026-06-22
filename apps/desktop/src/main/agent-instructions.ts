@@ -42,6 +42,13 @@ Examples:
 - A site feed:  \`opencli zhihu hot -f json\`
 - Read a page:  \`opencli web read --url "https://..." -f json\`
 
+### Reading Render's OWN open tab
+To inspect the page the user is currently looking at in Render, use the built-in
+\`render\` adapter — it drives Render's embedded browser over CDP (never system Chrome):
+- Current tab url+title:  \`opencli render get -f json\`
+- Current tab visible text: \`opencli render text -f json\`
+Open a page first with \`render-open <url>\`, then read it with \`opencli render …\`.
+
 ### Logged-in sites are automatic
 \`OPENCLI_CDP_ENDPOINT\` is set, so for sites that need a session (zhihu, dianping,
 twitter, taobao…) opencli drives the user's **real, already-logged-in browser**
