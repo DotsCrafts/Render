@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node test/run.mjs",
     "proof": "node harness/run-proof.mjs",
-    "proof:m2": "node harness/run-proof-m2.mjs"
+    "proof:m2": "node harness/run-proof-m2.mjs",
+    "proof:m3": "node harness/run-proof-m3.mjs"
   },
   "dependencies": {
     "@render/protocol": "workspace:*",

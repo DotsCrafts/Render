@@ -15,7 +15,7 @@
  */
 
 import { WebSocket } from 'ws';
-import { dispatch } from './actions.js';
+import { dispatch, type DispatchCaps } from './actions.js';
 import { RENDER_CONTEXT_ID, errorToResult, helloFrame } from './protocol.js';
 import type {
   CommandFrame,
@@ -33,6 +33,11 @@ const CLOSE_GRACE_MS = 2_000;
 export interface BridgeDeps {
   /** Owns + leases the CDP targets the bridge drives. */
   provider: TargetProvider;
+  /**
+   * Multi-lease capabilities (network capture buffer, download routing). Omitted
+   * for a single-lease bridge — the multi-lease actions then fail loudly.
+   */
+  caps?: DispatchCaps;
   /** Daemon `/ext` URL (default ws://127.0.0.1:19825/ext). */
   daemonUrl?: string;
   /**
@@ -93,7 +98,7 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
     record('RX', cmd);
     let result: ResultFrame;
     try {
-      result = await dispatch(deps.provider, cmd);
+      result = await dispatch(deps.provider, cmd, deps.caps ?? {});
     } catch (err) {
       result = errorToResult(cmd.id, err);
     }

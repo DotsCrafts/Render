@@ -14,14 +14,47 @@
  *   • screenshot → base64 string in `data`; page-scoped.   (client: const b64 = data)
  *   • frames     → ARRAY of cross-origin frames; page-scoped.
  *
- * Tabs/network-capture/wait-download remain M3 (multi-lease) — still stubbed.
+ * Milestone 3 adds the MULTI-LEASE action set, backed by a `MultiLeaseProvider`
+ * (registry of leases, each its own CDP target with a stable targetId):
+ *
+ *   • tabs new    → mint view+lease; data:{url}, page-scoped (client reads .page).
+ *   • tabs select → activate a lease; data:{selected:true}, page-scoped.
+ *   • tabs close  → dispose a lease; data:{closed:<targetId>}, NOT page-scoped.
+ *   • tabs list   → ARRAY of {index,page,url,title,active}; NOT page-scoped.
+ *   • network-capture-start → data:{started:true}, page-scoped.
+ *   • network-capture-read  → ARRAY of capture entries (drains), page-scoped.
+ *   • wait-download         → downloadResult object; NOT page-scoped.
  *
  * Every handler is async and pure w.r.t. the bridge: it takes the command + a
- * resolved target and returns a ResultFrame. No socket, no global state.
+ * resolved target and returns a ResultFrame. No socket. Multi-lease capabilities
+ * (network capture buffer, download config) are threaded through an optional
+ * `DispatchCaps` so single-lease callers (M1/M2 tests) stay unchanged.
  */
 
 import { ok, fail } from './protocol.js';
 import type { CdpTarget, CommandFrame, ResultFrame, TargetProvider } from './types.js';
+import type { MultiLeaseProvider } from './multi-lease.js';
+import type { NetworkCaptureRegistry } from './network-capture.js';
+import { waitForDownload, type WaitDownloadDeps } from './download.js';
+
+/**
+ * Optional multi-lease capabilities. When absent, the multi-lease actions fail
+ * loudly (as in M2) — a single-lease provider has no `tabs`/capture surface.
+ */
+export interface DispatchCaps {
+  /** Per-lease network capture buffer (Network domain). */
+  network?: NetworkCaptureRegistry;
+  /** Download routing config (CDP Browser.setDownloadBehavior target dir etc.). */
+  download?: WaitDownloadDeps;
+}
+
+/** Type guard: does this provider expose the multi-lease tab surface? */
+function isMultiLease(p: TargetProvider): p is MultiLeaseProvider {
+  return (
+    typeof (p as Partial<MultiLeaseProvider>).mint === 'function' &&
+    typeof (p as Partial<MultiLeaseProvider>).list === 'function'
+  );
+}
 
 const NAV_TIMEOUT_MS = 15_000;
 const SETTLE_MS = 800;
@@ -42,11 +75,21 @@ export async function handleNavigate(
     return fail(cmd.id, 'Blocked URL scheme — only http:// and https:// are allowed');
   }
   const target = await resolveTarget(provider, cmd);
+  const { title, url, timedOut } = await navigateTarget(target, cmd.url);
+  return ok(cmd.id, { title, url, timedOut }, target.targetId);
+}
 
-  // Drive navigation over CDP and wait for the load to settle (bounded), then a
-  // beat for SPA/redirect chains. A WebContentsView fires Page.frameStoppedLoading
-  // reliably (verified in the harness); we accept either signal so the wait never
-  // hangs on engines that emit only one of them.
+/**
+ * Drive a CDP navigation on a target and wait for the load to settle (bounded),
+ * then a beat for SPA/redirect chains. A WebContentsView fires
+ * Page.frameStoppedLoading reliably (verified in the harness); we accept either
+ * signal so the wait never hangs on engines that emit only one of them. Shared
+ * by `navigate` and `tabs new` (which opens a tab AT a url).
+ */
+async function navigateTarget(
+  target: CdpTarget,
+  url: string,
+): Promise<{ title: unknown; url: unknown; timedOut: boolean }> {
   let timedOut = false;
   const loaded = new Promise<void>((resolve) => {
     let done = false;
@@ -64,13 +107,12 @@ export async function handleNavigate(
       finish();
     }, NAV_TIMEOUT_MS);
   });
-  await target.send('Page.navigate', { url: cmd.url });
+  await target.send('Page.navigate', { url });
   await loaded;
   await delay(SETTLE_MS);
-
   const title = await evaluateValue(target, 'document.title');
-  const url = await evaluateValue(target, 'location.href');
-  return ok(cmd.id, { title, url, timedOut }, target.targetId);
+  const href = await evaluateValue(target, 'location.href');
+  return { title, url: href, timedOut };
 }
 
 // ── exec ─────────────────────────────────────────────────────────────────────
@@ -363,19 +405,151 @@ function enumerateCrossOriginFrames(tree: CdpFrameTree): WireFrame[] {
   return frames;
 }
 
-// ── stubs (M3+: multi-lease) ─────────────────────────────────────────────────
+// ── tabs (multi-lease) ───────────────────────────────────────────────────────
+
+interface WireTab {
+  index: number;
+  page: string | undefined;
+  url: string;
+  title: string;
+  active: boolean;
+}
+
+/** Best-effort url/title for a lease's target (page may not have loaded yet). */
+async function tabIdentity(target: CdpTarget): Promise<{ url: string; title: string }> {
+  try {
+    const url = (await evaluateValue(target, 'location.href')) as string;
+    const title = (await evaluateValue(target, 'document.title')) as string;
+    return { url: typeof url === 'string' ? url : '', title: typeof title === 'string' ? title : '' };
+  } catch {
+    return { url: '', title: '' };
+  }
+}
 
 /**
- * Structured stubs for the multi-lease action set (tabs, network-capture,
- * wait-download). Each returns a loud, correlated failure so an adapter that
- * depends on it surfaces a real error instead of timing out. These are the M3
- * punch-list (multi-lease provider / owned tabs / network capture).
+ * `tabs` — owned tab-group lifecycle. `cmd.op` selects new|select|close|list
+ * (matches the extension's `handleTabs`). Requires a multi-lease provider; a
+ * single-lease provider has no tab group, so it fails loudly (unchanged M2).
  */
-export async function handleStub(cmd: CommandFrame): Promise<ResultFrame> {
-  return fail(cmd.id, `Action not implemented (multi-lease, M3): ${cmd.action}`, {
-    errorCode: 'not_implemented',
-    errorHint: 'opencli-bridge single-lease covers navigate/exec/close-window/bind/cdp/cookies/screenshot/frames',
+export async function handleTabs(
+  provider: TargetProvider,
+  cmd: CommandFrame,
+): Promise<ResultFrame> {
+  if (!isMultiLease(provider)) {
+    return fail(cmd.id, 'tabs requires the multi-lease provider', {
+      errorCode: 'not_implemented',
+      errorHint: 'wire createMultiLeaseProvider into the bridge to enable tabs/owned-window semantics',
+    });
+  }
+  const op = typeof cmd.op === 'string' ? cmd.op : 'list';
+  switch (op) {
+    case 'new': {
+      if (cmd.url !== undefined) {
+        const u = String(cmd.url);
+        if (!(u.startsWith('http://') || u.startsWith('https://'))) {
+          return fail(cmd.id, 'Blocked URL scheme — only http:// and https:// are allowed');
+        }
+      }
+      const target = await provider.mint();
+      // Navigate the new tab if a url was given (the extension opens the tab AT url).
+      if (cmd.url !== undefined) {
+        await navigateTarget(target, String(cmd.url));
+      }
+      // page-scoped: client reads result.page as the new tab's handle.
+      return ok(cmd.id, { url: cmd.url ?? '' }, target.targetId);
+    }
+    case 'select': {
+      const target =
+        typeof cmd.page === 'string'
+          ? provider.select(cmd.page)
+          : selectByIndex(provider, cmd.index);
+      return ok(cmd.id, { selected: true }, target.targetId);
+    }
+    case 'close': {
+      const page =
+        typeof cmd.page === 'string'
+          ? cmd.page
+          : typeof cmd.index === 'number'
+            ? provider.list()[cmd.index]?.target.targetId
+            : undefined;
+      const closed = await provider.closeLease(page);
+      // NOT page-scoped; client reads result.closed.
+      return ok(cmd.id, { closed });
+    }
+    case 'list':
+    default: {
+      const leases = provider.list();
+      const tabs: WireTab[] = [];
+      for (let i = 0; i < leases.length; i++) {
+        const { target, active } = leases[i];
+        const { url, title } = await tabIdentity(target);
+        tabs.push({ index: i, page: target.targetId, url, title, active });
+      }
+      // NOT page-scoped; client does Array.isArray(result) ? result : [].
+      return ok(cmd.id, tabs);
+    }
+  }
+}
+
+function selectByIndex(provider: MultiLeaseProvider, index: unknown): CdpTarget {
+  const leases = provider.list();
+  const entry = typeof index === 'number' ? leases[index] : undefined;
+  if (!entry) throw new Error(`Page is not in the automation container (index ${String(index)})`);
+  return provider.select(entry.target.targetId);
+}
+
+// ── network-capture (multi-lease, per-lease buffer) ──────────────────────────
+
+export async function handleNetworkCaptureStart(
+  provider: TargetProvider,
+  cmd: CommandFrame,
+  caps: DispatchCaps,
+): Promise<ResultFrame> {
+  if (!caps.network) return unsupportedCapture(cmd);
+  const target = await resolveTarget(provider, cmd);
+  const pattern = typeof cmd.pattern === 'string' ? cmd.pattern : '';
+  await caps.network.start(target, pattern);
+  return ok(cmd.id, { started: true }, target.targetId);
+}
+
+export async function handleNetworkCaptureRead(
+  provider: TargetProvider,
+  cmd: CommandFrame,
+  caps: DispatchCaps,
+): Promise<ResultFrame> {
+  if (!caps.network) return unsupportedCapture(cmd);
+  const target = await resolveTarget(provider, cmd);
+  // ARRAY (client: Array.isArray) — drains the buffer (extension parity).
+  return ok(cmd.id, caps.network.read(target), target.targetId);
+}
+
+/** The extension reports an unimplemented capture as an "unknown action" the
+ *  client classifies as unsupported (page.js `isUnsupportedNetworkCaptureError`). */
+function unsupportedCapture(cmd: CommandFrame): ResultFrame {
+  return fail(cmd.id, `Unknown action: ${cmd.action} (network-capture unsupported)`, {
+    errorCode: 'unknown_action',
   });
+}
+
+// ── wait-download (multi-lease) ──────────────────────────────────────────────
+
+export async function handleWaitDownload(
+  provider: TargetProvider,
+  cmd: CommandFrame,
+  caps: DispatchCaps,
+): Promise<ResultFrame> {
+  if (!caps.download) {
+    return fail(cmd.id, 'wait-download requires download routing config', {
+      errorCode: 'not_implemented',
+      errorHint: 'pass DispatchCaps.download (CDP Browser.setDownloadBehavior dir)',
+    });
+  }
+  const target = await resolveTarget(provider, cmd);
+  const pattern = typeof cmd.pattern === 'string' ? cmd.pattern : '';
+  const timeoutMs = typeof cmd.timeoutMs === 'number' ? cmd.timeoutMs : 30_000;
+  const result = await waitForDownload(target, caps.download, pattern, timeoutMs);
+  // NOT page-scoped (extension handler carries no page).
+  return ok(cmd.id, result);
 }
 
 // ── dispatch ───────────────────────────────────────────────────────────────────
@@ -383,6 +557,7 @@ export async function handleStub(cmd: CommandFrame): Promise<ResultFrame> {
 export async function dispatch(
   provider: TargetProvider,
   cmd: CommandFrame,
+  caps: DispatchCaps = {},
 ): Promise<ResultFrame> {
   switch (cmd.action) {
     case 'navigate':
@@ -402,10 +577,13 @@ export async function dispatch(
     case 'frames':
       return handleFrames(provider, cmd);
     case 'tabs':
+      return handleTabs(provider, cmd);
     case 'network-capture-start':
+      return handleNetworkCaptureStart(provider, cmd, caps);
     case 'network-capture-read':
+      return handleNetworkCaptureRead(provider, cmd, caps);
     case 'wait-download':
-      return handleStub(cmd);
+      return handleWaitDownload(provider, cmd, caps);
     default:
       return fail(cmd.id, `Unknown action: ${cmd.action}`, { errorCode: 'unknown_action' });
   }

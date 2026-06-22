@@ -11,21 +11,29 @@
  * unqualified default keeps routing to system Chrome. Inert by default: with the
  * flag unset this module does nothing and nothing is constructed.
  *
- * Milestone 1 is single-lease: the bridge owns ONE bridge-only `WebContentsView`,
- * added off-screen (never shown, never inset over the user's tabs), matching the
- * daemon's `windowMode:"background"` commands. Multi-lease / owned windows are the
- * FULL-autonomy follow-up (see packages/opencli-bridge punch-list).
+ * Milestone 3 is MULTI-LEASE: the bridge owns a registry of bridge-only
+ * `WebContentsView`s (one per `tabs new`), each its own CDP target with a stable
+ * targetId, all added to ONE shared off-screen compositing host (never shown over
+ * the user's tabs), each at a distinct non-overlapping off-screen rect so a
+ * non-active lease can still be screenshotted. Network capture (per-lease) and
+ * wait-download (CDP Browser.setDownloadBehavior into a temp dir) are wired via
+ * DispatchCaps. Matches the daemon's owned-tab-group + windowMode model.
  *
  * Verification is the standalone harness (packages/opencli-bridge/harness), NOT a
  * relaunch of the user's app — this hook is exercised there in isolation.
  */
 
 import { WebContentsView, type BaseWindow } from 'electron';
+import { mkdtempSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   createOpencliBridge,
-  createWebContentsLeaseProvider,
+  createMultiWebContentsLeaseProvider,
+  createNetworkCaptureRegistry,
   RENDER_CONTEXT_ID,
   type BridgeHandle,
+  type DispatchCaps,
 } from '@render/opencli-bridge';
 
 export interface OpencliBridgeWire {
@@ -54,18 +62,23 @@ export interface OpencliBridgeWireDeps {
 export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBridgeWire | null {
   if (process.env.RENDER_OPENCLI_BRIDGE !== '1') return null;
 
-  let view: WebContentsView | null = null;
-  const provider = createWebContentsLeaseProvider({
+  // Each lease gets a distinct off-screen slot so all leased views composite
+  // simultaneously (lets a NON-active lease be screenshotted — see the M3 proof).
+  const VIEW_W = 600;
+  const VIEW_H = 800;
+  let slot = 0;
+  const provider = createMultiWebContentsLeaseProvider({
     mintView: async () => {
-      // Bridge-owned, off-screen view: never added to the visible content rect,
-      // so it cannot disturb the user's tabs or window chrome.
+      // Bridge-owned, off-screen view: parked far off any display, so it cannot
+      // disturb the user's tabs or window chrome. One view per `tabs new`.
       const v = new WebContentsView({
         webPreferences: { sandbox: true, contextIsolation: true },
       });
-      view = v;
       deps.window.contentView.addChildView(v);
-      v.setBounds({ x: -4000, y: -4000, width: 1280, height: 900 });
-      v.setVisible(false);
+      // Distinct, non-overlapping rect far off-screen; non-zero bounds so the
+      // page composites (required for screenshots of non-active leases).
+      v.setBounds({ x: -10000 + (slot % 2) * VIEW_W, y: -10000 + Math.floor(slot / 2) * VIEW_H, width: VIEW_W, height: VIEW_H });
+      slot += 1;
       await v.webContents.loadURL('about:blank');
       return {
         webContents: v.webContents,
@@ -76,15 +89,33 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
           } catch {
             /* already gone */
           }
-          if (view === v) view = null;
         },
       };
     },
   });
 
+  // Per-lease network capture buffer + a temp download dir for wait-download.
+  const downloadPath = mkdtempSync(join(tmpdir(), 'render-opencli-dl-'));
+  const caps: DispatchCaps = {
+    network: createNetworkCaptureRegistry(),
+    download: {
+      downloadPath,
+      // CDP `allowAndName` writes under the download GUID.
+      resolveSavePath: (guid) => join(downloadPath, guid),
+      fileSize: (p) => {
+        try {
+          return statSync(p).size;
+        } catch {
+          return 0;
+        }
+      },
+    },
+  };
+
   const profile = renderBridgeProfile();
   const bridge: BridgeHandle = createOpencliBridge({
     provider,
+    caps,
     // Distinct, named profile — never the shared system-Chrome contextId.
     contextId: profile,
     onError: (err) => console.warn('[opencli-bridge]', err.message),

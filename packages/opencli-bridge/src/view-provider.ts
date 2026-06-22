@@ -12,6 +12,7 @@
  */
 
 import { createSingleLeaseProvider } from './lease.js';
+import { createMultiLeaseProvider, type MultiLeaseProvider } from './multi-lease.js';
 import { createWebContentsTarget, type WcContents } from './webcontents-target.js';
 import type { TargetProvider } from './types.js';
 
@@ -29,6 +30,48 @@ export interface WebContentsLeaseDeps {
 
 export function createWebContentsLeaseProvider(deps: WebContentsLeaseDeps): TargetProvider {
   return createSingleLeaseProvider({
+    createTarget: async () => {
+      const view = await deps.mintView();
+      return createWebContentsTarget({
+        webContents: view.webContents,
+        destroyView: view.destroy,
+      });
+    },
+  });
+}
+
+/**
+ * createMultiWebContentsLeaseProvider — Milestone 3's drop-in replacement.
+ *
+ * Mints a FRESH `WebContentsView` per lease (each `tabs new`), each its own CDP
+ * target with a stable targetId, into the same shared off-screen compositing
+ * host window. The provider owns the lease registry; `mintView` owns the
+ * Electron surface (kept structural here).
+ *
+ * ── Multi-view screenshot compositing approach (M2 QA flag carried) ──────────
+ * We do NOT scale the single parked `showInactive()` window to N windows (that
+ * blows up per-display GPU surfaces and churns focus/z-order). Instead:
+ *
+ *   • ONE shared off-screen host `BaseWindow`, shown once via `showInactive()`
+ *     (parked far off any display) so its compositor is live but invisible and
+ *     never steals focus.
+ *   • Each lease is a child `WebContentsView` of that host, given a DISTINCT,
+ *     non-overlapping off-screen rect with non-zero bounds — so EVERY leased
+ *     view composites simultaneously, regardless of z-order.
+ *
+ * Because each view has its OWN `webContents` and its OWN CDP page target,
+ * `Page.captureScreenshot` renders that page's own surface — so a NON-active
+ * lease can be screenshotted without bringing it to front. This is the
+ * load-bearing property M3's proof asserts (screenshot a non-active lease).
+ *
+ * The host placement/sizing is the `mintView` caller's job (it owns electron);
+ * this provider only requires that `mintView` returns a view whose webContents
+ * composites. See `apps/desktop/src/main/opencli-bridge-wire.ts` for the wiring.
+ */
+export function createMultiWebContentsLeaseProvider(
+  deps: WebContentsLeaseDeps,
+): MultiLeaseProvider {
+  return createMultiLeaseProvider({
     createTarget: async () => {
       const view = await deps.mintView();
       return createWebContentsTarget({
