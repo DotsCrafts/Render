@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Render — Independent Eval Report (M1–M4 + M3)</title>
+<style>
+  :root{
+    --bg:#f6f8fa; --panel:#ffffff; --ink:#1b2230; --muted:#5b6675; --line:#e2e6ec;
+    --pass:#1a7f37; --pass-bg:#dafbe1; --fail:#cf222e; --fail-bg:#ffebe9;
+    --partial:#9a6700; --partial-bg:#fff8c5; --info:#0969da; --info-bg:#ddf4ff;
+    --code:#f3f5f8; --accent:#6f42c1;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#9aa5b1; --line:#283039;
+      --pass:#3fb950; --pass-bg:#12261a; --fail:#f85149; --fail-bg:#2a1416;
+      --partial:#d29922; --partial-bg:#2a2410; --info:#58a6ff; --info-bg:#0d2236;
+      --code:#0b0f14; --accent:#bc8cff;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 20px 80px;}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:8px;}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px;}
+  h1 .sub{color:var(--accent);font-weight:600;}
+  .meta{color:var(--muted);font-size:13px;}
+  .meta code{background:var(--code);padding:1px 6px;border-radius:5px;}
+  h2{font-size:19px;margin:34px 0 12px;display:flex;align-items:center;gap:10px;}
+  h3{font-size:15px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:700;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;}
+  .pill{display:inline-block;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid transparent;vertical-align:middle;}
+  .PASS{color:var(--pass);background:var(--pass-bg);border-color:var(--pass);}
+  .FAIL{color:var(--fail);background:var(--fail-bg);border-color:var(--fail);}
+  .PARTIAL{color:var(--partial);background:var(--partial-bg);border-color:var(--partial);}
+  .INFO{color:var(--info);background:var(--info-bg);border-color:var(--info);}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;
+    font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:8px 0;}
+  code{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cmd{color:var(--accent);}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;}
+  .scoregrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0;}
+  .scoregrid .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center;}
+  .scoregrid .box .lbl{font-size:12px;color:var(--muted);margin-bottom:6px;}
+  ul.punch{list-style:none;padding:0;margin:6px 0;}
+  ul.punch li{border:1px solid var(--line);border-left-width:4px;border-radius:8px;padding:10px 14px;margin:8px 0;background:var(--panel);}
+  ul.punch li.high{border-left-color:var(--fail);}
+  ul.punch li.med{border-left-color:var(--partial);}
+  ul.punch li.low{border-left-color:var(--info);}
+  ul.punch li.ok{border-left-color:var(--pass);}
+  .tag{font-size:11px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:5px;margin-right:8px;}
+  .tag.high{color:var(--fail);background:var(--fail-bg);}
+  .tag.med{color:var(--partial);background:var(--partial-bg);}
+  .tag.low{color:var(--info);background:var(--info-bg);}
+  .tag.ok{color:var(--pass);background:var(--pass-bg);}
+  img.shot{max-width:100%;border:1px solid var(--line);border-radius:10px;margin:10px 0;display:block;}
+  .ev{color:var(--muted);font-size:13px;margin:4px 0 2px;}
+  details{margin:8px 0;}
+  summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13px;}
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:12.5px;}
+  a{color:var(--info);}
+  .kv{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:13px;color:var(--muted);margin:6px 0;}
+  .kv b{color:var(--ink);font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Render — Independent Eval <span class="sub">M1 · M2 · M4 (+ M3)</span></h1>
+  <div class="meta">
+    Worker QA · evaluator <code>QA-1</code> · 2026-06-22 · repo <code>/Users/drej/workspace/render</code> ·
+    git <code>8bde4fc</code> (advanced from <code>10d7fc6</code> mid-session)
+  </div>
+  <div class="meta" style="margin-top:8px">
+    Methodology: every result below is a <b>real run on this macOS box</b> — no mocks accepted as a pass.
+    DONE markers from build workers are treated as claims; the captured command output is the truth.
+  </div>
+</header>
+
+<div class="scoregrid">
+  <div class="box"><div class="lbl">E1 · Install + Typecheck</div><span class="pill PASS">PASS</span></div>
+  <div class="box"><div class="lbl">E2 · Agent-bridge spine</div><span class="pill PASS">PASS</span></div>
+  <div class="box"><div class="lbl">E3 · ux-render panel</div><span class="pill PASS">PASS</span></div>
+  <div class="box"><div class="lbl">E4 · Desktop + CDP</div><span class="pill PASS">PASS<span style="font-weight:400">*</span></span></div>
+  <div class="box"><div class="lbl">E5 · Integration seam</div><span class="pill PARTIAL">STUB</span></div>
+  <div class="box"><div class="lbl">Bonus · M3 app-hand</div><span class="pill PASS">PASS</span></div>
+</div>
+
+<div class="card">
+  <h3>Bottom line</h3>
+  <p style="margin:6px 0">
+    All four QA-brief milestones are <b>functionally real and verified</b>. The codex agent streams a genuine
+    turn through the seatbelt sandbox; the UX panel renders all four message types from a scripted stream; the
+    Electron shell opens, browses a real <code>example.com</code> tab, and its CDP human-hand attaches and
+    round-trips <code>document.title</code>. M3 (opencli-router) landed during this session and its smoke also
+    returns <b>real arXiv data through the sandbox</b>.
+  </p>
+  <p style="margin:6px 0">
+    The one honest gap is <b>integration</b>: <code>apps/desktop</code> still emits events from the
+    <code>agent-stub</code> (<code>TODO(bridge)</code>) and imports neither <code>@render/agent-bridge</code> nor
+    <code>@render/opencli-router</code>. The pieces are real and individually proven, but the spine is not yet
+    wired into the shell. <span style="color:var(--muted)">(* E4: functional proofs all pass; a GUI <em>pixel</em>
+    screenshot of the Electron chrome could not be saved from this terminal — macOS screen-recording permission
+    denied — so the <code>cdp-selftest</code> log + live relay endpoints are the evidence, as the brief permits.)</span>
+  </p>
+  <div class="kv">
+    <span><b>node</b> v25.9.0</span><span><b>pnpm</b> 10.33.0</span>
+    <span><b>codex-cli</b> 0.136.0</span><span><b>opencli</b> 1.8.4</span>
+    <span><b>electron-vite</b> / vite 5.4.21</span><span><b>workspace projects</b> 8</span>
+  </div>
+</div>
+
+<!-- ───────────────────────── E1 ───────────────────────── -->
+<h2>Eval 1 — Install &amp; typecheck <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <div class="ev">Command</div>
+  <pre><span class="cmd">$ pnpm install</span>
+Scope: all 8 workspace projects
+Lockfile is up to date, resolution step is skipped
+Already up to date · Done in 479ms</pre>
+  <div class="ev">Per-package <code>tsc --noEmit</code> exit codes (0 = clean, no errors emitted)</div>
+  <table>
+    <tr><th>Package</th><th>Result</th><th>Package</th><th>Result</th></tr>
+    <tr><td>@render/protocol</td><td><span class="pill PASS">exit 0</span></td><td>@render/cdp-human-hand</td><td><span class="pill PASS">exit 0</span></td></tr>
+    <tr><td>@render/sandbox</td><td><span class="pill PASS">exit 0</span></td><td>@render/ux-render</td><td><span class="pill PASS">exit 0</span></td></tr>
+    <tr><td>@render/agent-bridge</td><td><span class="pill PASS">exit 0</span></td><td>@render/opencli-router</td><td><span class="pill PASS">exit 0</span></td></tr>
+    <tr><td>@render/desktop (node+web)</td><td><span class="pill PASS">exit 0</span></td><td colspan="2" style="color:var(--muted)">3,701 LOC of real TS/TSX across packages + app</td></tr>
+  </table>
+  <p style="margin:6px 0;color:var(--muted)">All seven workspace TS projects + the desktop's two tsconfigs compile with zero errors.</p>
+</div>
+
+<!-- ───────────────────────── E2 ───────────────────────── -->
+<h2>Eval 2 — Agent-bridge codex smoke (the spine) <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <div class="ev">Command — starts codex <code>app-server</code> inside the <code>local-seatbelt</code> SandboxProvider and runs one real turn</div>
+  <pre><span class="cmd">$ NO_PROXY=127.0.0.1,localhost pnpm --filter @render/agent-bridge smoke "say hello in 3 words"</span></pre>
+  <div class="ev">Streamed result (stdout)</div>
+  <pre>{
+  "ok": true,
+  "provider": "local-seatbelt",
+  "prompt": "say hello in 3 words",
+  "model": "gpt-5.4",
+  "modelProvider": "OpenAI",
+  "threadId": "019eec92-6128-7ec2-8181-29e607b9b601",
+  "turnId":   "019eec92-624d-7b93-90cc-f70125f971d4",
+  "turnStatus": "completed",
+  "agentText": "Hello, nice day.",
+  "eventKinds": { "sandbox":2, "turn_started":1, "item":6, "delta":5, "turn_completed":1 }
+}</pre>
+  <details>
+    <summary>Live AgentEvent stream (stderr)</summary>
+    <pre>[smoke] sandbox: local-seatbelt (no E2B_API_KEY) → local-seatbelt
+[event] sandbox.spawning (local-seatbelt)
+[event] sandbox.ready (local-seatbelt)
+[event] turn_started 019eec92-624d-7b93-90cc-f70125f971d4
+[event] item.started userMessage → item.completed userMessage
+[event] item.started reasoning   → item.completed reasoning
+[event] item.started agentMessage
+Hello, nice day.
+[event] item.completed agentMessage
+[event] turn_completed completed (5849ms)</pre>
+  </details>
+  <p style="margin:8px 0">
+    <b>Why this is real, not a mock:</b> a fresh codex thread/turn UUID, the live model
+    <code>gpt-5.4</code> via the configured OpenAI provider, a 3-word reply produced over 5 streamed deltas, and
+    <code>turn_completed</code> in 5.8s. The sandbox layer is genuine — <code>local-seatbelt.ts</code> wraps
+    one-shot commands in macOS <code>sandbox-exec</code> with a workspace-write profile; the brain spawns in the
+    jail and codex creates its own seatbelt children per command.
+  </p>
+  <p style="margin:8px 0;color:var(--muted)">
+    e2b path: <code>pnpm --filter @render/sandbox test:e2b</code> correctly prints
+    <code>SKIP: E2B_API_KEY not set</code> (guarded test, no key on this box) — the seam exists and compiles.
+  </p>
+</div>
+
+<!-- ───────────────────────── E3 ───────────────────────── -->
+<h2>Eval 3 — ux-render panel (4 UX types) <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <div class="ev">Build</div>
+  <pre><span class="cmd">$ pnpm --filter @render/ux-render build</span>
+vite v6.4.3 · ✓ 1925 modules transformed
+dist/assets/index-*.js   632.87 kB │ gzip: 189.59 kB     ✓ built in 1.89s</pre>
+  <div class="ev">Harness — <code>pnpm --filter @render/ux-render dev</code> replaying the scripted AgentEvent stream, captured headless at full panel height:</div>
+  <img class="shot" src="../packages/ux-render/screenshots/qa-all-surfaces.png"
+       alt="ux-render agent panel — all four surfaces" />
+  <p style="margin:8px 0">All four <code>UxMessage</code> kinds render from the scripted stream, plus the non-ux event feed:</p>
+  <table>
+    <tr><th>Surface</th><th>Evidence in capture</th></tr>
+    <tr><td><b>ux render</b> (non-blocking)</td><td>钱江世纪城 咖啡店合集 + Summary cards (Seesaw Coffee / M Stand, fields, image, Open link)</td></tr>
+    <tr><td><b>ux form</b> (blocking)</td><td>选项 / 半径(km) inputs with Cancel + 提交 buttons</td></tr>
+    <tr><td><b>ux confirm</b> (blocking)</td><td>确认把这2家加入收藏夹? → 允许 / 拒绝</td></tr>
+    <tr><td><b>ux confirm + danger + diff</b></td><td>"Sensitive action" Alert + unified-diff Details + Apply / Reject</td></tr>
+    <tr><td><b>login</b> (Plane-2)</td><td>Log in to <code>zhihu</code> — security note: <i>"the sandbox never sees Plane-2 credentials"</i> ✓</td></tr>
+    <tr><td>event feed</td><td>turn_started, sandbox spawning/ready, userMessage, reasoning, commandExecution, delta, turn_completed · 8421ms</td></tr>
+  </table>
+  <p style="margin:8px 0;color:var(--muted)">
+    The login card shows the required Plane-2 security note. Prose is rendered safely
+    (textContent, never innerHTML) per the panel's own annotation — structure is the injection boundary.
+    Fresh QA artifact written to <code>packages/ux-render/screenshots/qa-all-surfaces.png</code>.
+  </p>
+</div>
+
+<!-- ───────────────────────── E4 ───────────────────────── -->
+<h2>Eval 4 — Electron desktop launch + CDP self-test <span class="pill PASS">PASS*</span></h2>
+<div class="card">
+  <div class="ev">Command</div>
+  <pre><span class="cmd">$ pnpm --filter @render/desktop dev</span>
+build the electron main process successfully
+build the electron preload files successfully
+dev server running for the electron renderer process at http://localhost:5173/
+start electron app...
+
+[render] CDP relay listening at ws://127.0.0.1:53419
+[render] CDP self-test OK — example.com document.title = "Example Domain"</pre>
+  <div class="ev">Live CDP relay (the remote-sandbox reverse-proxy seam) — queried while the app was running</div>
+  <pre><span class="cmd">$ curl --noproxy '*' http://127.0.0.1:53419/json/list</span>
+[{"id":"tab-1","type":"page","title":"Example Domain","url":"https://example.com/",
+  "webSocketDebuggerUrl":"ws://127.0.0.1:53419?tabId=tab-1"},
+ {"id":"tab-2","type":"page","title":"Example Domain","url":"https://example.com/", ...}]
+<span class="cmd">$ curl .../json/version</span> → {"Browser":"Render/0.1 (human-hand relay)","Protocol-Version":"1.3", ...}
+<span class="cmd">$ curl .../health</span>      → {"ok":true}</pre>
+  <table>
+    <tr><th>Brief requirement</th><th>Verdict</th><th>Evidence</th></tr>
+    <tr><td>A window opens</td><td><span class="pill PASS">PASS</span></td><td>app starts; relay + self-test fire on the chrome's <code>did-finish-load</code></td></tr>
+    <tr><td>Browses a real URL in a WebContentsView tab</td><td><span class="pill PASS">PASS</span></td><td>two live <code>example.com</code> page targets in <code>/json/list</code></td></tr>
+    <tr><td>CDP attach + <code>document.title</code> round-trips</td><td><span class="pill PASS">PASS</span></td><td><code>document.title = "Example Domain"</code> via <code>Runtime.evaluate</code></td></tr>
+    <tr><td>Floating input + right agent panel render</td><td><span class="pill PASS">PASS</span></td><td>chrome renderer loaded (self-test is gated on it); <code>FloatingInput.tsx</code>, <code>AgentPanel.tsx</code> mounted in <code>App.tsx</code></td></tr>
+    <tr><td>GUI pixel screenshot of the chrome</td><td><span class="pill INFO">N/A</span></td><td>macOS screen-recording permission denied to the terminal → <code>screencapture</code> returns black; cdp-selftest log used instead (brief-permitted)</td></tr>
+  </table>
+  <p style="margin:8px 0;color:var(--muted)">
+    Note: the chrome renderer hard-depends on the <code>window.render</code> preload bridge. Loading
+    <code>localhost:5173</code> in a plain browser (no preload) white-screens with
+    <code>TypeError: Cannot read properties of undefined (reading 'getState')</code> at
+    <code>useRenderState.ts:12</code> — confirming the renderer is correctly IPC-only, but also that there is no
+    error boundary (punch-list #3). Inside Electron the bridge is present and the self-test running proves the
+    chrome mounted cleanly.
+  </p>
+</div>
+
+<!-- ───────────────────────── E5 ───────────────────────── -->
+<h2>Eval 5 — Integration smell check <span class="pill PARTIAL">STUB SEAM</span></h2>
+<div class="card">
+  <p style="margin:6px 0">
+    <code>apps/desktop/src/main/index.ts</code> wires <code>createAgentStub(...)</code> — the
+    <code>TODO(bridge)</code> fake AgentEvent producer. A grep across <code>apps/desktop/src</code> finds
+    <b>no import of <code>@render/agent-bridge</code> nor <code>@render/opencli-router</code></b> (only comments
+    referencing the future swap). The IPC shapes match <code>protocol/src/ipc.ts</code> exactly, so the swap is
+    designed to be drop-in — but as of <code>8bde4fc</code> it has not happened.
+  </p>
+  <pre><span class="cmd">$ grep -rn "agent-bridge|opencli-router" apps/desktop/src</span>
+agent-stub.ts:5:  * TODO(bridge): Worker Sandbox / Worker Bridge own packages/agent-bridge ...
+preload/index.ts:4: * never reach codex / opencli / CDP except through these channels.
+→ NEITHER agent-bridge NOR opencli-router imported in apps/desktop (stub-only seam)</pre>
+  <p style="margin:6px 0"><b>Seam status for M3/integration follow-up:</b></p>
+  <ul class="punch">
+    <li class="high"><span class="tag high">SEAM</span> Brain not wired: desktop emits stub events, not real codex turns. Swap <code>createAgentStub</code> → an <code>AgentSession</code> from <code>@render/agent-bridge</code> bound to a <code>SandboxProvider</code>; forward <code>onServerRequest</code> → <code>ux</code> AgentEvents and <code>resolveUx</code> → <code>resolvePending</code>.</li>
+    <li class="med"><span class="tag med">SEAM</span> App-hand not wired: <code>@render/opencli-router</code> exists and its smoke passes, but it is not exposed over IPC to the agent/renderer yet (no app-hand route in <code>ipc.ts</code>). <code>HumanHand.cdpEndpoint()</code> is the relay the router targets for browser/cookie commands.</li>
+  </ul>
+</div>
+
+<!-- ───────────────────────── Bonus M3 ───────────────────────── -->
+<h2>Bonus — M3 opencli-router app-hand <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <p style="margin:6px 0;color:var(--muted)">
+    Not in the QA brief's five evals, but the package landed mid-session (HEAD advanced
+    <code>10d7fc6 → 8bde4fc</code>; <code>opencli-router</code> went from an empty stub to 12 files). Re-verified
+    for real since the repo changed under evaluation.
+  </p>
+  <pre><span class="cmd">$ pnpm --filter @render/opencli-router smoke</span>
+1. classify (real `opencli list` metadata, 1231 commands cached):
+   arxiv search → public · 12306 me → cookie · zhihu hot → cookie
+2. public adapter via sandbox → opencli arxiv search (REAL):
+   ok=true strategy=public ranOn=sandbox
+   • 2025-06-08  AR-RAG: Autoregressive Retrieval Augmentation for Image Generation
+   • 2025-04-18  Intelligent Interaction Strategies for Context-Aware Cognitive ...
+   • 2025-04-24  Factually: Exploring Wearable Fact-Checking ...
+   ↳ 3 real papers returned from arXiv
+3. browser route (cdp-human-hand relay wiring):
+   OPENCLI_CDP_ENDPOINT → http://127.0.0.1:54406
+   invoke 12306 me → ok=false ranOn=cdp-human-hand · needsLogin site=12306 loginUrl=https://kyfw.12306.cn
+✅ SMOKE PASS — real public data + browser-route wiring verified</pre>
+  <p style="margin:6px 0">Real arXiv results through the sandbox; the browser route returns a clean
+    <code>needsLogin</code> (no crash) and wires <code>OPENCLI_CDP_ENDPOINT</code> to the live relay.</p>
+</div>
+
+<!-- ───────────────────────── Punch list ───────────────────────── -->
+<h2>Punch-list for the build workers</h2>
+<ul class="punch">
+  <li class="high"><span class="tag high">HIGH · INTEGRATION</span> Wire the real brain into <code>apps/desktop</code> — replace <code>agent-stub</code> with <code>@render/agent-bridge</code>'s <code>AgentSession</code> over a <code>SandboxProvider</code>. The shapes already match; this is the headline remaining work to make Render an actual agent browser rather than a shell + a separately-proven engine.</li>
+  <li class="med"><span class="tag med">MED · INTEGRATION</span> Expose <code>@render/opencli-router</code> over IPC and let the agent route app-hand commands; connect its browser/cookie path to <code>HumanHand.cdpEndpoint()</code> and surface <code>needsLogin</code> as a <code>login</code> UxMessage in the panel.</li>
+  <li class="low"><span class="tag low">LOW · ROBUSTNESS</span> Renderer has no error boundary — a missing <code>window.render</code> bridge white-screens the whole app (<code>useRenderState.ts:12</code>). Add an error boundary / null-guard so a transient preload gap degrades gracefully.</li>
+  <li class="low"><span class="tag low">LOW · BUILD</span> ux-render production bundle is 633 kB (single chunk, &gt;500 kB warning). Consider <code>manualChunks</code> / dynamic import of the @json-render catalog for the embeddable panel.</li>
+  <li class="ok"><span class="tag ok">INFO · TOOLING</span> GUI pixel screenshots of the Electron window can't be saved from this terminal (macOS screen-recording TCC → black frame). Functional CDP/relay logs were used as evidence. Grant Screen Recording to the terminal/automation host for future visual diffs.</li>
+  <li class="ok"><span class="tag ok">INFO · PROCESS</span> The repo was modified by other workers <em>during</em> evaluation (M3 appeared; a recalled memory claimed M3 done before its files existed in the first snapshot). Evals here reflect HEAD <code>8bde4fc</code>; treat any stale "DONE"/memory claim as a hypothesis to re-verify.</li>
+</ul>
+
+<footer>
+  Render — a Chromium browser whose brain is a codex agent.
+  Independent eval by Worker QA (<code>QA-1</code>), 2026-06-22, against
+  <code>/Users/drej/workspace/render</code> @ <code>8bde4fc</code>.
+  Sources: <code>.briefs/worker-QA.md</code>, <code>docs/render-architecture.html</code>,
+  <code>packages/protocol/src/*</code>. Every PASS above is backed by a real command run on this machine.
+</footer>
+
+</div>
+</body>
+</html>

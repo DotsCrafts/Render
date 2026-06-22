@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Render — Final End-to-End Eval (M7)</title>
+<style>
+  :root{
+    --bg:#f6f8fa; --panel:#ffffff; --ink:#1b2230; --muted:#5b6675; --line:#e2e6ec;
+    --pass:#1a7f37; --pass-bg:#dafbe1; --fail:#cf222e; --fail-bg:#ffebe9;
+    --partial:#9a6700; --partial-bg:#fff8c5; --info:#0969da; --info-bg:#ddf4ff;
+    --code:#f3f5f8; --accent:#6f42c1;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#9aa5b1; --line:#283039;
+      --pass:#3fb950; --pass-bg:#12261a; --fail:#f85149; --fail-bg:#2a1416;
+      --partial:#d29922; --partial-bg:#2a2410; --info:#58a6ff; --info-bg:#0d2236;
+      --code:#0b0f14; --accent:#bc8cff;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 20px 80px;}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:8px;}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px;}
+  h1 .sub{color:var(--accent);font-weight:600;}
+  .meta{color:var(--muted);font-size:13px;}
+  .meta code{background:var(--code);padding:1px 6px;border-radius:5px;}
+  h2{font-size:19px;margin:34px 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  h3{font-size:13px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:700;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;}
+  .pill{display:inline-block;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid transparent;vertical-align:middle;}
+  .PASS{color:var(--pass);background:var(--pass-bg);border-color:var(--pass);}
+  .FAIL{color:var(--fail);background:var(--fail-bg);border-color:var(--fail);}
+  .PARTIAL{color:var(--partial);background:var(--partial-bg);border-color:var(--partial);}
+  .INFO{color:var(--info);background:var(--info-bg);border-color:var(--info);}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;
+    font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:8px 0;}
+  code{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cmd{color:var(--accent);}
+  mark{background:var(--partial-bg);color:var(--ink);padding:0 3px;border-radius:3px;font-weight:600;}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;}
+  .scoregrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin:16px 0;}
+  .scoregrid .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center;}
+  .scoregrid .box .lbl{font-size:12px;color:var(--muted);margin-bottom:6px;min-height:30px;}
+  ul.punch{list-style:none;padding:0;margin:6px 0;}
+  ul.punch li{border:1px solid var(--line);border-left-width:4px;border-radius:8px;padding:10px 14px;margin:8px 0;background:var(--panel);}
+  ul.punch li.high{border-left-color:var(--fail);}
+  ul.punch li.med{border-left-color:var(--partial);}
+  ul.punch li.low{border-left-color:var(--info);}
+  ul.punch li.ok{border-left-color:var(--pass);}
+  .tag{font-size:11px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:5px;margin-right:8px;}
+  .tag.high{color:var(--fail);background:var(--fail-bg);}
+  .tag.med{color:var(--partial);background:var(--partial-bg);}
+  .tag.low{color:var(--info);background:var(--info-bg);}
+  .tag.ok{color:var(--pass);background:var(--pass-bg);}
+  .ev{color:var(--muted);font-size:13px;margin:8px 0 2px;}
+  details{margin:8px 0;}
+  summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13px;}
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:12.5px;}
+  a{color:var(--info);}
+  .kv{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:13px;color:var(--muted);margin:6px 0;}
+  .kv b{color:var(--ink);font-weight:600;}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;margin:10px 0;}
+  .flow span.node{background:var(--code);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-family:ui-monospace,monospace;}
+  .flow span.arr{color:var(--accent);font-weight:700;}
+  .verdict{font-size:16px;font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Render — Final End-to-End Eval <span class="sub">M7 · full user journey</span></h1>
+  <div class="meta">
+    Worker QA · evaluator <code>QA-FINAL</code> · 2026-06-22 · repo <code>/Users/drej/workspace/render</code> ·
+    git <code>eeef2c5</code> &nbsp;<i>"feat(desktop): wire the real spine — AgentSession + opencli-router + ux-render"</i>
+  </div>
+  <div class="meta" style="margin-top:8px">
+    Question this report answers: <b>does a real prompt produce a real codex turn that uses real hands and renders
+    through json-render, with a working human round-trip — and is there any stub left in the path?</b>
+  </div>
+</header>
+
+<div class="scoregrid">
+  <div class="box"><div class="lbl">E1 · Build + typecheck</div><span class="pill PASS">PASS</span></div>
+  <div class="box"><div class="lbl">E2 · Journey proof (codex turn + HITL)</div><span class="pill PASS">PASS</span></div>
+  <div class="box"><div class="lbl">E3 · opencli hand → ux render</div><span class="pill PASS">PASS</span></div>
+  <div class="box"><div class="lbl">E4 · Live desktop + CDP</div><span class="pill PASS">PASS<span style="font-weight:400">*</span></span></div>
+  <div class="box"><div class="lbl">E5 · Browser / login route</div><span class="pill PASS">PASS</span></div>
+</div>
+
+<div class="card">
+  <h3>Verdict</h3>
+  <p class="verdict" style="margin:6px 0">
+    ✅ The full journey works end-to-end with <b>no stub in the path.</b> Shippable as a prototype.
+  </p>
+  <p style="margin:8px 0">
+    A real prompt routes through the real spine: <code>agent-stub.ts</code> is <b>deleted</b>;
+    <code>main/index.ts</code> wires <code>createAgentRuntime</code> (a real <code>@render/agent-bridge</code>
+    <code>AgentSession</code> running <code>codex app-server</code> in a seatbelt sandbox) + a real
+    <code>@render/opencli-router</code> + the <code>@render/ux-render</code> panel. The decisive proof: an
+    approved shell command <b>actually ran in the sandbox and its real output was used by the agent</b> — the
+    agent reported <code>date -u</code> = <mark>Mon Jun 22 04:29:50 UTC 2026</mark>, matching this machine's
+    wall clock (<code>04:30:26 UTC</code>) to within 36 seconds. A mock or hallucination cannot do that.
+  </p>
+  <div class="flow">
+    <span class="node">floating input</span><span class="arr">→</span>
+    <span class="node">IPC submitPrompt</span><span class="arr">→</span>
+    <span class="node">AgentRuntime</span><span class="arr">→</span>
+    <span class="node">codex (sandbox)</span><span class="arr">→</span>
+    <span class="node">requestApproval</span><span class="arr">→</span>
+    <span class="node">ux confirm</span><span class="arr">→</span>
+    <span class="node">human "允许"</span><span class="arr">→</span>
+    <span class="node">resolvePending accept</span><span class="arr">→</span>
+    <span class="node">date -u runs</span><span class="arr">→</span>
+    <span class="node">real output in reply</span>
+  </div>
+  <div class="kv" style="margin-top:10px">
+    <span><b>node</b> v25.9.0</span><span><b>pnpm</b> 10.33.0</span>
+    <span><b>codex-cli</b> 0.136.0</span><span><b>opencli</b> 1.8.4</span>
+    <span><b>model</b> gpt-5.4 / OpenAI</span><span><b>sandbox</b> local-seatbelt</span>
+  </div>
+  <p style="margin:8px 0;color:var(--muted)">
+    * E4: the live Electron app boots the real spine, browses, and passes the CDP self-test, but the prompt was
+    <b>not clicked in the GUI</b> — macOS screen-recording permission blocks window capture/automation of the
+    Electron window. The <code>submitPrompt → turn → HITL</code> path is proven by the journey-proof, which imports
+    the <em>identical</em> <code>createAgentRuntime</code> wiring <code>index.ts</code> hands the IPC broker.
+  </p>
+</div>
+
+<!-- ───────────── E1 ───────────── -->
+<h2>Eval 1 — Build + typecheck still green <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <pre><span class="cmd">$ pnpm install</span>            → Lockfile up to date · Already up to date · Done in 820ms (8 projects)
+<span class="cmd">$ pnpm -r exec tsc --noEmit</span>   → exit 0 · zero errors emitted across all 8 workspace projects</pre>
+  <p style="margin:6px 0;color:var(--muted)">Includes the newly-wired <code>apps/desktop</code> (now depends on
+    <code>@render/agent-bridge</code>, <code>@render/opencli-router</code>, <code>@render/sandbox</code>,
+    <code>@render/ux-render</code>) plus protocol, cdp-human-hand and the rest. Clean.</p>
+</div>
+
+<!-- ───────────── E2 ───────────── -->
+<h2>Eval 2 — Journey proof: real codex turn + HITL round-trip that affects the turn <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <div class="ev">Command — drives the real spine headlessly with the same wiring as the GUI</div>
+  <pre><span class="cmd">$ NO_PROXY=127.0.0.1,localhost pnpm --filter @render/desktop proof</span></pre>
+  <div class="ev">Section B — codex asks command approval; the proof acts as the human and approves the blocking ux confirm</div>
+  <pre>B. brain — codex turn that asks command approval (HITL round-trip):
+   · sandbox.spawning (local-seatbelt)
+   · sandbox.ready (local-seatbelt)
+   ux confirm (blocking)
+   ⮑  human approves confirm ux-1 → ux_confirm "允许"
+   · turn_completed: completed</pre>
+  <div class="ev"><b>The decisive check</b> — the agent's streamed reply (stderr deltas) carries the REAL command output:</div>
+  <pre>Running `date -u` in the shell now and I'll report the exact output.
+`date -u` printed:
+
+    <mark>Mon Jun 22 04:29:50 UTC 2026</mark>
+
+<span class="cmd">$ date -u</span>   # wall clock at verification, moments later
+    Mon Jun 22 04:30:26 UTC 2026   ← 36s apart ⇒ the approved command genuinely executed</pre>
+  <div class="ev">Result envelope (stdout)</div>
+  <pre>{
+  "ok": true,
+  "opencliPapers": 3,
+  "codexTurnStatus": "completed",
+  "confirmRoundTrip": true,
+  "cdpEndpoint": "http://127.0.0.1:63958",
+  "browserRouteLogin": true,
+  "eventKinds": { "turn_started":3, "ux":3, "turn_completed":3, "sandbox":2, "item":8, "delta":44 }
+}
+✅ M6 PASS — opencli ux render + codex HITL round-trip + live CDP browser route</pre>
+  <p style="margin:8px 0">
+    <b>Why this satisfies the brief's bar</b> ("a human decision that actually affects the turn — an approved
+    command runs and its real output is used"): codex requested approval → it surfaced as a blocking
+    <code>ux confirm</code> → the human "允许" mapped to codex's <code>{decision:'accept'}</code>
+    (the 0.136.0 vocabulary, per integration-notes B1) → <code>date -u</code> ran in the sandbox → its actual
+    UTC timestamp (within 36s of wall clock) appears verbatim in the agent's final answer. Deny would have
+    cancelled the command; the real timestamp is the falsifiable evidence it did not.
+  </p>
+  <details>
+    <summary>Skeptic's note on the proof's own gating</summary>
+    <p style="margin:6px 0;color:var(--muted)"><code>journey-proof.ts</code>'s <code>result.ok</code> gates on
+    <code>codexTurnStatus==='completed'</code> but <em>not</em> on <code>confirmRoundTrip</code>, so a future run
+    where codex completes <em>without</em> asking approval could still report <code>ok:true</code>. This run did
+    round-trip (<code>confirmRoundTrip:true</code>) and I verified the real <code>date -u</code> output
+    independently — so the claim holds here — but the assertion should be tightened (punch-list #2).</p>
+  </details>
+</div>
+
+<!-- ───────────── E3 ───────────── -->
+<h2>Eval 3 — opencli public adapter surfaces as ux render with real data <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <div class="ev">Section A of the proof — <code>/opencli arxiv search …</code> routed through <code>@render/opencli-router</code>
+    (public → its own sandbox), real arXiv rows mapped to a <code>ux render</code> (<code>opencli-to-ux.ts</code>)</div>
+  <pre>A. app hand — /opencli arxiv search (REAL):
+   ux render: arxiv search · sandbox — 3 item(s)
+     • Overcoming low-utility facets for complex answer retrieval
+     • Lightweight and Direct Document Relevance Optimization for Generative In…
+     • LLandMark: A Multi-Agent Framework for Landmark-Aware Multimodal Interac…
+   · turn_completed: completed
+  → result.opencliPapers = 3</pre>
+  <p style="margin:6px 0">Real arXiv paper titles, <code>ranOn=sandbox</code>, <code>strategy=public</code>,
+    rendered as catalog-whitelisted cards in the json-render panel — not a placeholder, not a mock.</p>
+</div>
+
+<!-- ───────────── E4 ───────────── -->
+<h2>Eval 4 — Live desktop launch + CDP <span class="pill PASS">PASS*</span></h2>
+<div class="card">
+  <pre><span class="cmd">$ pnpm --filter @render/desktop dev</span>
+build the electron main process successfully
+  out/main/index.js  55.39 kB · out/main/chunks/index-*.js  <b>627.37 kB</b>   ← the real spine bundled in
+dev server running for the electron renderer process at http://localhost:5173/
+start electron app...
+
+[render] CDP relay listening at ws://127.0.0.1:64385
+[render] CDP self-test OK — example.com document.title = "Example Domain"</pre>
+  <div class="ev">Live relay while the window was open — two real <code>example.com</code> WebContentsView tabs</div>
+  <pre><span class="cmd">$ curl --noproxy '*' http://127.0.0.1:64385/json/list</span>
+[{"id":"tab-1","title":"Example Domain","url":"https://example.com/", …},
+ {"id":"tab-2","title":"Example Domain","url":"https://example.com/", …}]</pre>
+  <table>
+    <tr><th>Brief requirement</th><th>Verdict</th><th>Evidence</th></tr>
+    <tr><td>Window opens, browses a real tab</td><td><span class="pill PASS">PASS</span></td><td>2 live example.com page targets in <code>/json/list</code></td></tr>
+    <tr><td>Real AgentPanel + floating input present</td><td><span class="pill PASS">PASS</span></td><td>chrome renderer loaded (self-test gated on it); <code>@render/ux-render</code> AgentPanel mounted (React 18→19 bump, styles imported)</td></tr>
+    <tr><td>CDP attaches</td><td><span class="pill PASS">PASS</span></td><td><code>document.title = "Example Domain"</code> via Runtime.evaluate</td></tr>
+    <tr><td>Real spine in main process (no stub)</td><td><span class="pill PASS">PASS</span></td><td>627 kB main chunk vs the old 18 kB stub; <code>createAgentRuntime</code>+<code>createOpencliRouter</code> wired into the IPC broker</td></tr>
+    <tr><td>Drive a real prompt in the GUI</td><td><span class="pill INFO">via proof</span></td><td>GUI click blocked (macOS TCC); identical <code>AgentRuntime</code> wiring exercised by Eval 2's journey-proof</td></tr>
+  </table>
+  <div class="ev">No stub anywhere in the path</div>
+  <pre><span class="cmd">$ ls apps/desktop/src/main/agent-stub.ts</span>  → No such file (DELETED)
+<span class="cmd">$ grep -n submitPrompt|resolveUx apps/desktop/src/main/ipc.ts</span>
+  IPC.submitPrompt → agent.submit(text)
+  IPC.resolveUx    → agent.resolveUx(id, result)        // real AgentRuntime, not a stub</pre>
+</div>
+
+<!-- ───────────── E5 ───────────── -->
+<h2>Eval 5 — Browser / login route via CDP human-hand <span class="pill PASS">PASS</span></h2>
+<div class="card">
+  <div class="ev">Section C of the proof — a cookie adapter (12306) routes to the human-hand relay and returns a ux login</div>
+  <pre>C. human hand — CDP relay + browser route:
+   OPENCLI_CDP_ENDPOINT → http://127.0.0.1:63958
+   relay /json/version → {"Browser":"Render/0.1 (human-hand relay)","Protocol-Version":"1.3", …}
+   ux login (blocking)
+   ux login → site=12306 loginUrl=https://kyfw.12306.cn</pre>
+  <p style="margin:6px 0">The browser-strategy invoke wires <code>OPENCLI_CDP_ENDPOINT</code> to the live relay and,
+    with no logged-in session, returns a <code>needsLogin</code> that the runtime surfaces as a blocking
+    <code>ux login</code> (site + loginUrl). A real login completion needs a human at the tab; the routing +
+    live relay endpoint are proven, which is the bar for this eval.</p>
+</div>
+
+<!-- ───────────── Punch list ───────────── -->
+<h2>Punch-list</h2>
+<ul class="punch">
+  <li class="low"><span class="tag low">LOW · DOCS</span> Stale comment <code>main/index.ts:7</code> still says "a TEMPORARY agent stub" — the stub is gone and the real runtime is wired. Update the docstring.</li>
+  <li class="low"><span class="tag low">LOW · TEST RIGOR</span> <code>journey-proof.ts</code> <code>result.ok</code> should also require <code>confirmRoundTrip</code> (and ideally assert the real <code>date -u</code> output is present) so the HITL claim can't silently pass on a run where codex never asks for approval.</li>
+  <li class="med"><span class="tag med">MED · UPSTREAM</span> The two codex-0.136.0 fixes from integration-notes are app-layer workarounds: accept/cancel mapping (<code>ux-reply.ts</code>) and the hook-free <code>CODEX_HOME</code> (<code>codex-home.ts</code>). Upstream into <code>@render/agent-bridge</code> (change <code>dispose()</code> default to <code>{decision:'cancel'}</code>; offer hook-free-home or <code>-c hooks…</code> override) so HITL works against an arbitrary user home without the desktop patching around it.</li>
+  <li class="ok"><span class="tag ok">INFO · TOOLING</span> GUI pixel screenshots of the Electron window remain impossible from this terminal (macOS screen-recording TCC → black frame). Main-process + relay logs are the evidence, as the brief permits. Grant Screen Recording for future visual capture / GUI-driven prompt tests.</li>
+  <li class="ok"><span class="tag ok">INFO · PERF</span> Desktop main bundle is 627 kB (the spine inlined). Fine for a prototype; revisit chunking if cold-start matters.</li>
+</ul>
+
+<footer>
+  Render — a Chromium browser whose brain is a codex agent.
+  Final end-to-end eval by Worker QA (<code>QA-FINAL</code>), 2026-06-22, against
+  <code>/Users/drej/workspace/render</code> @ <code>eeef2c5</code>.
+  Sources: <code>.briefs/worker-QA-M7.md</code>, <code>.briefs/integration-notes.md</code>,
+  <code>.briefs/worker-A-M6.md</code>, <code>apps/desktop/src/main/*</code>.
+  Every PASS is backed by a real command run on this machine — the headline being a real agent turn whose approved
+  <code>date -u</code> matched wall-clock time. Prior milestone report: <code>docs/render-eval-M1-M4.html</code>.
+</footer>
+
+</div>
+</body>
+</html>
