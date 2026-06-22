@@ -21,9 +21,34 @@
 import { app, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+const HOME_PREFIX = 'render-codex-home-';
+
+/**
+ * Remove stale materialized CODEX_HOMEs from prior runs. Each holds the model
+ * credential in PLAINTEXT (codex needs to read it), so a hard kill that skips
+ * cleanup() would otherwise leave keys on disk. Best-effort, called at startup
+ * before any new home is materialized.
+ */
+function sweepStaleHomes(): void {
+  try {
+    const dir = tmpdir();
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith(HOME_PREFIX)) {
+        try {
+          rmSync(join(dir, name), { recursive: true, force: true });
+        } catch {
+          /* in use / gone — skip */
+        }
+      }
+    }
+  } catch {
+    /* tmpdir unreadable — skip */
+  }
+}
 import { stripHookSections } from '@render/agent-bridge';
 import type {
   CodexProviderConfig as ProviderConfig,
@@ -140,6 +165,8 @@ export interface CodexProvider {
 }
 
 export function createCodexProvider(): CodexProvider {
+  sweepStaleHomes(); // clear plaintext-key leftovers from prior runs
+
   const getStatus = (): ProviderStatus => {
     const provider = readProvider();
     const secret = readSecret();
@@ -242,8 +269,9 @@ export function createCodexProvider(): CodexProvider {
     const secret = readSecret();
     if (!secret) return null; // no Render credential → caller uses legacy path
     const provider = readProvider();
-    const path = await mkdtemp(join(tmpdir(), 'render-codex-home-'));
-    await writeFile(join(path, 'auth.json'), secret);
+    const path = await mkdtemp(join(tmpdir(), HOME_PREFIX));
+    // 0600: the plaintext credential must not be group/world-readable.
+    await writeFile(join(path, 'auth.json'), secret, { mode: 0o600 });
     // Merge Render's provider block with any non-hook config the user already has.
     let base = '';
     try {
