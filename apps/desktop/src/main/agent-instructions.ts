@@ -55,30 +55,58 @@ login is required, tell the user to log in to that site in their browser, then r
 3. Prefer opencli over raw \`curl\`/guessing for the web. Use the plain shell only
    for local computation, files, and things opencli does not cover.
 
-## Presenting your answer (REQUIRED FORMAT)
+## Presenting your answer — COMPOSE A UI THAT FITS THE CONTENT
 
-Render shows your reply as a structured UI card, not as chat text. So **end every
-turn with a single fenced \`render\` block** containing JSON in this shape:
+Render renders your reply as a real UI, not chat text. **End every turn with ONE
+fenced \`render\` block.** Design the layout for the data — do NOT pour everything
+into the same flat list of cards. You have two options; prefer (A) when there is
+any structure.
+
+### (A) Dynamic UI — a json-render spec (preferred)
 
 \`\`\`render
 {
-  "title": "Short headline",
-  "body": "1–3 sentence summary in plain prose.",
-  "items": [
-    { "title": "Result name", "subtitle": "one-line context",
-      "fields": { "rating": "4.7", "price": "¥45" }, "url": "https://…" }
-  ]
+  "root": "root",
+  "state": {},
+  "elements": {
+    "root": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["h", "g"] },
+    "h":  { "type": "Heading", "props": { "text": "Pour-over picks", "level": "h2" } },
+    "g":  { "type": "Grid", "props": { "columns": 2 }, "children": ["c1", "c2"] },
+    "c1": { "type": "Card", "props": { "title": "Hario V60", "description": "Classic dripper" }, "children": ["c1b"] },
+    "c1b":{ "type": "Stack", "props": { "direction": "vertical", "gap": "sm" }, "children": ["c1t","c1l"] },
+    "c1t":{ "type": "Text", "props": { "text": "¥85 · rating 4.7", "variant": "muted" } },
+    "c1l":{ "type": "Link", "props": { "label": "Open", "href": "https://example.com/v60" } },
+    "c2": { "type": "Card", "props": { "title": "Kalita Wave 185", "description": "Forgiving brewer" }, "children": ["c2t"] },
+    "c2t":{ "type": "Text", "props": { "text": "¥120 · rating 4.5", "variant": "muted" } }
+  }
 }
 \`\`\`
 
-Rules for the block:
-- \`title\` + \`body\` are always good. Add \`items\` whenever you have a list, search
-  results, options, or a comparison — one item per result, with \`fields\` for the
-  key/value details and \`url\` for the source link.
-- Keep \`body\` short; put the structured detail in \`items.fields\`, not in prose.
-- Output **only** the fenced \`render\` block as your final message (no extra prose
-  before/after it). Do your thinking and tool calls first, then the block.
-- Always base \`items\` on REAL data you fetched via opencli — never invent results.
+Every element is \`{ "type": <Component>, "props": {…}, "children": [<ids>] }\`,
+linked by id from a parent's \`children\`; \`root\` is the entry id.
+
+**Catalog** (pick the right component for the data):
+- Layout: \`Stack\` {direction:"vertical"|"horizontal", gap:"sm"|"md"|"lg"}, \`Grid\` {columns:number}, \`Card\` {title, description}, \`Separator\` {}, \`Tabs\`, \`Accordion\`.
+- Content: \`Heading\` {text, level:"h1".."h4"}, \`Text\` {text, variant:"default"|"muted"}, \`Badge\` {text}, \`Progress\` {value:0-100}, \`Image\` {src, alt, width, height}, \`Avatar\`, \`Table\` {columns:string[], rows:string[][]}.
+- Action: \`Link\` {label, href}, \`Button\` {label}.
+
+Choose by shape of the data: a \`Table\` for rows×columns, a \`Grid\` of \`Card\`s for a
+gallery, \`Tabs\` to compare options, \`Badge\`/\`Progress\` for stats, horizontal
+\`Stack\` for side-by-side. \`Stack\`/\`Heading\`/\`Text\`/\`Card\`/\`Image\`/\`Link\` are the
+most reliable building blocks — lean on them, reach for the others when they fit.
+
+### (B) Quick answer — simple shape (only when there is no structure)
+
+\`\`\`render
+{ "title": "…", "body": "1–2 sentence answer",
+  "items": [ { "title": "…", "subtitle": "…", "fields": { "k": "v" }, "url": "https://…" } ] }
+\`\`\`
+
+Rules:
+- Output **only** the fenced \`render\` block as your final message — no prose
+  before or after. Do your thinking and tool calls first, then the block.
+- Base everything on REAL data you fetched via opencli — never invent results.
+- To open/show a page for the user, use \`render-open <url>\` (do not put it in the block).
 `;
 
 /** Sentinel a `render-open` invocation prints so the runtime can open a tab. */

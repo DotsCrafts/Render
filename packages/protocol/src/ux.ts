@@ -40,6 +40,15 @@ export interface UxRenderSpec {
   /** plain prose body (markdown-ish), rendered safely above items */
   body?: string;
   items?: UxRenderItem[];
+  /**
+   * A full @json-render Spec ({ root, elements, state }) for a dynamic,
+   * content-appropriate UI composed from the catalog (Table, Tabs, Grid, Badge,
+   * Progress, …). When present it takes precedence over title/body/items — the
+   * renderer passes it through the catalog whitelist (structure is the injection
+   * boundary) with a prose fallback if it fails to render. This is what makes the
+   * agent's output genuinely generative, not a fixed card template.
+   */
+  ui?: unknown;
 }
 export interface UxRenderItem {
   title?: string;

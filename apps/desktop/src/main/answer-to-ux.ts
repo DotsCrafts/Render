@@ -36,6 +36,11 @@ function coerceRenderSpec(raw: string): UxRenderSpec | null {
   }
   if (!obj || typeof obj !== 'object') return null;
   const o = obj as Record<string, unknown>;
+  // Full @json-render Spec → dynamic UI passthrough. Carry a plain-text fallback
+  // (harvested from the spec's Text/Heading nodes) for the render-error path.
+  if (typeof o.root === 'string' && o.elements && typeof o.elements === 'object') {
+    return { ui: o, body: harvestText(o.elements as Record<string, unknown>) };
+  }
   const hasShape =
     typeof o.title === 'string' || typeof o.body === 'string' || Array.isArray(o.items);
   if (!hasShape) return null;
@@ -62,6 +67,19 @@ function coerceItem(v: unknown): UxRenderItem | null {
     if (Object.keys(fields).length) item.fields = fields;
   }
   return Object.keys(item).length ? item : null;
+}
+
+/** Collect visible text from a json-render elements map (Text/Heading props.text). */
+function harvestText(elements: Record<string, unknown>): string {
+  const out: string[] = [];
+  for (const el of Object.values(elements)) {
+    if (el && typeof el === 'object') {
+      const props = (el as Record<string, unknown>).props as Record<string, unknown> | undefined;
+      const t = props?.text;
+      if (typeof t === 'string' && t.trim()) out.push(t.trim());
+    }
+  }
+  return out.join('\n').slice(0, 600);
 }
 
 /** Strip fenced render/json blocks, leaving readable prose for the fallback body. */
