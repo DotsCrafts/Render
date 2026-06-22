@@ -28,10 +28,19 @@ export interface IpcBroker {
   dispose: () => void;
 }
 
+const MAX_EVENT_LOG = 500;
+
 export function registerIpc(deps: IpcDeps): IpcBroker {
   const { chrome, tabs, agent, humanHand } = deps;
 
+  // Durable event stream: the renderer holds events in React state, which is
+  // wiped on any reload (HMR, crash, accidental navigation). Buffer them here in
+  // the main process and replay via getState() so a reload restores the stream.
+  const eventLog: AgentEvent[] = [];
+
   const emitAgent = (event: AgentEvent): void => {
+    eventLog.push(event);
+    if (eventLog.length > MAX_EVENT_LOG) eventLog.splice(0, eventLog.length - MAX_EVENT_LOG);
     if (!chrome.isDestroyed()) chrome.send(IPC.agentEvent, event);
   };
   const emitTabs = (snapshot: TabState[]): void => {
@@ -50,7 +59,7 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.tabCreate]: (_e, url?: string) => ({ tabId: tabs.create(url) }),
     [IPC.tabClose]: (_e, tabId: string) => tabs.close(tabId),
     [IPC.tabActivate]: (_e, tabId: string) => tabs.activate(tabId),
-    [IPC.getState]: () => ({ tabs: tabs.snapshot() }),
+    [IPC.getState]: () => ({ tabs: tabs.snapshot(), events: eventLog.slice() }),
 
     [CHROME_IPC.back]: (_e, tabId: string) => tabs.goBack(tabId),
     [CHROME_IPC.forward]: (_e, tabId: string) => tabs.goForward(tabId),

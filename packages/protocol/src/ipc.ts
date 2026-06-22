@@ -60,7 +60,7 @@ export interface RenderApi {
   tabCreate(url?: string): Promise<{ tabId: string }>;
   tabClose(tabId: string): Promise<void>;
   tabActivate(tabId: string): Promise<void>;
-  getState(): Promise<{ tabs: TabState[] }>;
+  getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[] }>;
   onAgentEvent(cb: (e: AgentEvent) => void): () => void;
   onTabsChanged(cb: (tabs: TabState[]) => void): () => void;
 }

@@ -41,6 +41,8 @@ export function useRenderState(): RenderState {
     const api = window.render;
     void api.getState().then((s) => {
       setTabs(s.tabs);
+      // replay the buffered agent stream so a renderer reload doesn't wipe it
+      if (s.events && s.events.length) setEvents(s.events.slice(-MAX_EVENTS));
       if (activeRef.current === null) setActiveId(s.tabs[s.tabs.length - 1]?.id ?? null);
     });
 
