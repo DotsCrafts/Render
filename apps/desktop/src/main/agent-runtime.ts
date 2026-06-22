@@ -121,6 +121,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         }
         return;
       }
+      if (event.kind === 'item' && event.item.type === 'userMessage') {
+        return; // we already echoed the user's message optimistically in submit()
+      }
       if (event.kind === 'item' && event.item.type === 'agentMessage') {
         if (event.phase === 'completed') {
           const id = typeof event.item.id === 'string' ? event.item.id : undefined;
@@ -188,6 +191,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 
   const submit = async (text: string): Promise<{ turnId: string }> => {
+    // Optimistic echo: show the user's own message in the stream immediately,
+    // before the sandbox/codex boot (otherwise the first turn shows nothing for
+    // seconds). codex's own userMessage item is suppressed below to avoid a dup.
+    deps.emit({ kind: 'item', phase: 'completed', item: { type: 'userMessage', text } });
     const opencli = parseOpencliCommand(text);
     if (opencli) return runOpencli(opencli);
     await ensureStarted();
