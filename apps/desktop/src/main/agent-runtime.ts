@@ -181,6 +181,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         codexHome = await prepareCodexHome();
         const env: Record<string, string> = {};
         if (codexHome) env.CODEX_HOME = codexHome.path;
+        // opencli's default profile (~/.opencli/browser-profiles.json) is often a
+        // DISCONNECTED context, which makes browser/search commands fail with
+        // "profile not connected". Pin a connected profile so the agent's opencli
+        // browser commands work without it having to recover each time.
+        env.OPENCLI_PROFILE = process.env.OPENCLI_PROFILE ?? 'default';
         // Wire the human-hand relay so the agent's opencli browser-adapter calls
         // drive the user's REAL logged-in Chromium (Plane-2 stays in the browser).
         if (deps.cdpEndpoint) {
