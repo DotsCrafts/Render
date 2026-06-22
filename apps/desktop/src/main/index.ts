@@ -18,6 +18,7 @@ import { registerIpc } from './ipc.js';
 import { runCdpSelfTest } from './cdp-selftest.js';
 import { enableRenderCdp } from './cdp-port.js';
 import { registerRenderOpencliApp } from './opencli-render-app.js';
+import { maybeWireOpencliBridge } from './opencli-bridge-wire.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
 
@@ -82,6 +83,12 @@ function wire(win: BrowserWindow): void {
 
   const broker = registerIpc({ chrome: win.webContents, tabs, agent, humanHand });
 
+  // Flag-gated (RENDER_OPENCLI_BRIDGE=1), default OFF: serve opencli's /ext
+  // browser backend from Render's OWN Chromium so cookie/browser adapters run
+  // inside Render, never system Chrome. Inert unless the flag is set; verified
+  // via packages/opencli-bridge/harness, not by relaunching this app.
+  const opencliBridge = maybeWireOpencliBridge({ window: win });
+
   // Guard the chrome shell: a link clicked inside the agent panel must NEVER
   // replace the app UI. Any top-level navigation away from the renderer origin
   // is cancelled and opened as a real Render browsing tab instead.
@@ -129,6 +136,7 @@ function wire(win: BrowserWindow): void {
     void router.dispose();
     tabs.dispose();
     void humanHand.dispose();
+    void opencliBridge?.dispose();
   });
 }
 

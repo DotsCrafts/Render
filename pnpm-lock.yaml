@@ -16,6 +16,9 @@ importers:
       '@render/cdp-human-hand':
         specifier: workspace:*
         version: link:../../packages/cdp-human-hand
+      '@render/opencli-bridge':
+        specifier: workspace:*
+        version: link:../../packages/opencli-bridge
       '@render/opencli-router':
         specifier: workspace:*
         version: link:../../packages/opencli-router
@@ -109,6 +112,28 @@ importers:
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/opencli-bridge:
+    dependencies:
+      '@render/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      '@types/ws':
+        specifier: ^8.5.13
+        version: 8.18.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

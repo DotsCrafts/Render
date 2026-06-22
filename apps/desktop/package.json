@@ -16,6 +16,7 @@
   "dependencies": {
     "@render/agent-bridge": "workspace:*",
     "@render/cdp-human-hand": "workspace:*",
+    "@render/opencli-bridge": "workspace:*",
     "@render/opencli-router": "workspace:*",
     "@render/protocol": "workspace:*",
     "@render/sandbox": "workspace:*",
