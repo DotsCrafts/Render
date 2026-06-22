@@ -14,7 +14,19 @@ You are the agent inside **Render**, a web browser. Your job is to ACT on the
 user's behalf across the web and apps — not to answer from memory. You have real
 hands; use them.
 
-## Your primary hand: opencli
+## Opening / showing a web page: use the user's OWN browser
+
+To **open, show, or navigate to a web page** for the user (e.g. "open youtube",
+"go to bilibili", "show me that article"), run:
+
+    render-open <url>
+
+This opens the page as a tab in **Render's own embedded browser** (built-in CDP).
+NEVER use opencli, curl, or a system browser just to *open/view* a page — opencli
+would launch a different browser. \`render-open\` keeps everything inside Render.
+Use a full URL (add https:// if missing).
+
+## Your primary hand: opencli (for DATA, not for opening pages)
 
 \`opencli\` is installed and on your PATH. It turns 1200+ websites and apps into
 deterministic commands. **It is your primary tool for anything involving the web,
@@ -68,6 +80,38 @@ Rules for the block:
   before/after it). Do your thinking and tool calls first, then the block.
 - Always base \`items\` on REAL data you fetched via opencli — never invent results.
 `;
+
+/** Sentinel a `render-open` invocation prints so the runtime can open a tab. */
+export const RENDER_OPEN_SENTINEL = '__RENDER_OPEN__';
+
+/**
+ * Install a `render-open <url>` shim into a bin dir inside the sandbox and return
+ * that dir (caller prepends it to PATH). The shim just prints a sentinel line;
+ * the runtime watches the agent's command stream for it and opens the URL in
+ * Render's own browser via the human-hand. Best-effort.
+ */
+export async function installRenderOpen(sandbox: SandboxProvider, env?: Record<string, string>): Promise<string | null> {
+  const binDir = `${sandbox.workdir()}/.render-bin`;
+  const script = `#!/bin/sh\nprintf '${RENDER_OPEN_SENTINEL} %s\\n' "$1"\n`;
+  const cmd =
+    `mkdir -p "${binDir}" && cat > "${binDir}/render-open" <<'RENDER_OPEN_EOF'\n${script}RENDER_OPEN_EOF\nchmod +x "${binDir}/render-open"`;
+  try {
+    const res = await sandbox.exec('sh', ['-c', cmd], { cwd: sandbox.workdir(), ...(env ? { env } : {}) });
+    return res.exitCode === 0 ? binDir : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Extract the URL from a `render-open <url>` command (raw or zsh -lc wrapped). */
+export function parseRenderOpen(command: string | undefined): string | null {
+  if (!command) return null;
+  const m = command.match(/render-open\s+(.+)$/);
+  if (!m) return null;
+  const url = m[1].trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!url || url === 'render-open' || /\s/.test(url)) return null;
+  return /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+}
 
 /**
  * Drop AGENTS.md into the sandbox workdir (provider-agnostic, via the sandbox's

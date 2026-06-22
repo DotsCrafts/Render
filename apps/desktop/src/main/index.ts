@@ -66,6 +66,9 @@ function wire(win: BrowserWindow): void {
     // give the BRAIN the human-hand relay so its own opencli browser-adapter
     // calls drive the user's real logged-in Chromium (not a headless sandbox).
     cdpEndpoint: () => humanHand.cdpEndpoint(),
+    // the `render-open` tool: open a page in Render's OWN browser, not system Chrome.
+    // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange.
+    openTab: (url) => tabs.openUrl(url),
     now: () => Date.now(),
   });
 

@@ -33,7 +33,12 @@ import { prepareCodexHome, type CodexHome } from './codex-home.js';
 import { parseOpencliCommand } from './opencli-command.js';
 import { opencliResultToUx } from './opencli-to-ux.js';
 import { uxResultToCodexReply } from './ux-reply.js';
-import { RENDER_AGENTS_MD, writeAgentsMd } from './agent-instructions.js';
+import {
+  RENDER_AGENTS_MD,
+  writeAgentsMd,
+  installRenderOpen,
+  parseRenderOpen,
+} from './agent-instructions.js';
 import { answerToUxMessage } from './answer-to-ux.js';
 
 export interface AgentRuntime {
@@ -51,6 +56,8 @@ export interface AgentRuntimeDeps {
   sandbox: SandboxProvider;
   /** the app hand — routes /opencli commands (public→sandbox, browser→CDP relay) */
   router: OpencliRouterHandle;
+  /** open a URL in Render's OWN browser tab (human-hand) — the `render-open` tool */
+  openTab?: (url: string) => void;
   /**
    * The human-hand CDP relay endpoint. Injected into the sandbox as
    * OPENCLI_CDP_ENDPOINT so the AGENT's own opencli browser-adapter calls reach
@@ -124,6 +131,29 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       if (event.kind === 'item' && event.item.type === 'userMessage') {
         return; // we already echoed the user's message optimistically in submit()
       }
+      // `render-open <url>` → open the page in Render's OWN browser tab (not a
+      // system browser). The shim only prints a sentinel; the real open is here.
+      if (
+        event.kind === 'item' &&
+        event.phase === 'completed' &&
+        event.item.type === 'commandExecution'
+      ) {
+        const url = parseRenderOpen(event.item.command);
+        if (url && deps.openTab) {
+          deps.openTab(url);
+          deps.emit({
+            kind: 'ux',
+            message: {
+              id: `ux-open-${++uxSeq}`,
+              kind: 'render',
+              blocking: false,
+              ts: deps.now(),
+              spec: { title: 'Opened in your browser', body: url, items: [{ title: url, url }] },
+            },
+          });
+          return; // don't also show the raw shim command row
+        }
+      }
       if (event.kind === 'item' && event.item.type === 'agentMessage') {
         if (event.phase === 'completed') {
           const id = typeof event.item.id === 'string' ? event.item.id : undefined;
@@ -161,9 +191,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           }
         }
         // Start the sandbox ourselves, then seed AGENTS.md (makes opencli the
-        // agent's mandated hand) before the brain boots.
+        // agent's mandated hand) + install the `render-open` tool before boot.
         await deps.sandbox.start({ env });
         await writeAgentsMd(deps.sandbox, RENDER_AGENTS_MD, env);
+        const binDir = await installRenderOpen(deps.sandbox, env);
+        if (binDir) env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
         session = buildSession(env);
         await session.start();
       })().catch((err) => {
