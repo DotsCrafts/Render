@@ -40,6 +40,7 @@ import {
   type BridgeHandle,
   type DispatchCaps,
 } from '@render/opencli-bridge';
+import { bindDefaultProfile } from './opencli-profile-bind.js';
 
 export interface OpencliBridgeWire {
   /** The opencli profile name Render registered as — point `OPENCLI_PROFILE` here. */
@@ -129,13 +130,24 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
     onError: (err) => console.warn('[opencli-bridge]', err.message),
   });
 
-  void bridge.start().catch((err) => {
-    console.warn('[opencli-bridge] failed to connect to daemon:', String(err));
-  });
+  // Once connected, make Render the daemon's DEFAULT profile so every opencli
+  // command (agent sandbox, skills, the user's terminal) routes to Render's own
+  // browser with no OPENCLI_PROFILE needed — the root fix for "none selected"
+  // ambiguity. Bind after connect so we never become default-but-unreachable.
+  let restoreProfile: () => void = () => {};
+  void bridge
+    .start()
+    .then(() => {
+      restoreProfile = bindDefaultProfile(profile);
+    })
+    .catch((err) => {
+      console.warn('[opencli-bridge] failed to connect to daemon:', String(err));
+    });
 
   return {
     profile,
     dispose: async () => {
+      restoreProfile(); // hand the default back to system Chrome
       await bridge.stop();
     },
   };
