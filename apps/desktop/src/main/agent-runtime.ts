@@ -33,6 +33,7 @@ import { prepareCodexHome, type CodexHome } from './codex-home.js';
 import { parseOpencliCommand } from './opencli-command.js';
 import { opencliResultToUx } from './opencli-to-ux.js';
 import { uxResultToCodexReply } from './ux-reply.js';
+import { RENDER_AGENTS_MD, writeAgentsMd } from './agent-instructions.js';
 
 export interface AgentRuntime {
   submit(text: string): Promise<{ turnId: string }>;
@@ -49,6 +50,12 @@ export interface AgentRuntimeDeps {
   sandbox: SandboxProvider;
   /** the app hand — routes /opencli commands (public→sandbox, browser→CDP relay) */
   router: OpencliRouterHandle;
+  /**
+   * The human-hand CDP relay endpoint. Injected into the sandbox as
+   * OPENCLI_CDP_ENDPOINT so the AGENT's own opencli browser-adapter calls reach
+   * the user's real logged-in Chromium. Lazy — the relay binds at window boot.
+   */
+  cdpEndpoint?: () => Promise<string>;
   now: () => number;
   approvalPolicy?: ApprovalPolicy;
   sandboxMode?: SandboxMode;
@@ -77,8 +84,17 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   const buildSession = (env?: Record<string, string>): AgentSession => {
     const s = new AgentSession({
       sandbox: deps.sandbox,
-      approvalPolicy: deps.approvalPolicy ?? 'on-request',
+      // we start()/dispose() the sandbox ourselves so we can seed AGENTS.md
+      // before codex boots.
+      externalSandbox: true,
+      // browsing agent UX: let opencli reads flow (they stream into the panel),
+      // and only surface a ux confirm when a command needs to escalate out of the
+      // sandbox. HITL is preserved for the risky cases, not every read.
+      approvalPolicy: deps.approvalPolicy ?? 'on-failure',
       sandboxMode: deps.sandboxMode ?? 'workspace-write',
+      // the agent's hand (opencli) needs the network + the localhost CDP relay;
+      // codex's workspace-write sandbox denies network unless we opt in.
+      extraArgs: ['-c', 'sandbox_workspace_write.network_access=true'],
       effort: deps.effort ?? 'low',
       ...(deps.model ? { model: deps.model } : {}),
       ...(deps.logRaw ? { logRaw: true } : {}),
@@ -102,7 +118,22 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         // Render owns the approval UX, so run codex against a hook-free home —
         // approvals then arrive over the protocol as our ux confirm/form.
         codexHome = await prepareCodexHome();
-        session = buildSession(codexHome ? { CODEX_HOME: codexHome.path } : undefined);
+        const env: Record<string, string> = {};
+        if (codexHome) env.CODEX_HOME = codexHome.path;
+        // Wire the human-hand relay so the agent's opencli browser-adapter calls
+        // drive the user's REAL logged-in Chromium (Plane-2 stays in the browser).
+        if (deps.cdpEndpoint) {
+          try {
+            env.OPENCLI_CDP_ENDPOINT = await deps.cdpEndpoint();
+          } catch {
+            /* relay not up yet — public/API adapters still work headless */
+          }
+        }
+        // Start the sandbox ourselves, then seed AGENTS.md (makes opencli the
+        // agent's mandated hand) before the brain boots.
+        await deps.sandbox.start({ env });
+        await writeAgentsMd(deps.sandbox, RENDER_AGENTS_MD, env);
+        session = buildSession(env);
         await session.start();
       })().catch((err) => {
         startPromise = null; // allow a retry after a failed boot

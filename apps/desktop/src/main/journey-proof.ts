@@ -20,7 +20,7 @@
 import { selectSandbox, describeSelection } from '@render/sandbox';
 import { createOpencliRouter } from '@render/opencli-router';
 import { createHumanHand } from '@render/cdp-human-hand';
-import type { AgentEvent, UxMessage } from '@render/protocol';
+import type { AgentEvent, UxMessage, UxLoginSpec } from '@render/protocol';
 import { createAgentRuntime, type AgentRuntime } from './agent-runtime.js';
 
 const TIMEOUT_MS = Number(process.env.PROOF_TIMEOUT_MS ?? 180_000);
@@ -146,7 +146,8 @@ async function main(): Promise<number> {
     const loginUx = uxSeen.find((m) => m.kind === 'login');
     result.browserRouteLogin = Boolean(loginUx);
     if (loginUx && loginUx.kind === 'login') {
-      line(`   ux login → site=${loginUx.spec.site} loginUrl=${loginUx.spec.loginUrl}`);
+      const login = loginUx.spec as UxLoginSpec;
+      line(`   ux login → site=${login.site} loginUrl=${login.loginUrl}`);
     }
     hr();
 

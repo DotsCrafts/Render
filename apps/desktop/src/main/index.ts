@@ -63,6 +63,9 @@ function wire(win: BrowserWindow): void {
     emit: (event) => broker.emitAgent(event),
     sandbox: selectSandbox(),
     router,
+    // give the BRAIN the human-hand relay so its own opencli browser-adapter
+    // calls drive the user's real logged-in Chromium (not a headless sandbox).
+    cdpEndpoint: () => humanHand.cdpEndpoint(),
     now: () => Date.now(),
   });
 
