@@ -67,14 +67,16 @@ export class TabManager {
     });
     const tab: Tab = { id, view, ...(opts.groupId ? { groupId: opts.groupId } : {}) };
 
+    // Register BEFORE loadURL: loadURL can synchronously emit did-start-loading
+    // → onChange → snapshot, which must see a fully-registered tab.
+    this.tabs.set(id, tab);
+    this.order = [...this.order, id];
     this.wireEvents(tab);
     this.window.contentView.addChildView(view);
     view.setBounds(this.bounds());
     view.setVisible(false);
     void view.webContents.loadURL(url);
 
-    this.tabs.set(id, tab);
-    this.order = [...this.order, id];
     if (opts.activate ?? true) this.activate(id);
     else this.emit();
     return id;
@@ -166,9 +168,12 @@ export class TabManager {
   }
 
   listTabs(): Array<{ tabId: string; url: string; title: string }> {
-    return this.order.map((id) => {
-      const wc = this.tabs.get(id)!.view.webContents;
-      return { tabId: id, url: wc.getURL(), title: wc.getTitle() };
+    this.reapDead();
+    return this.order.flatMap((id) => {
+      const tab = this.tabs.get(id);
+      if (!tab || !this.isLive(tab)) return [];
+      const wc = tab.view.webContents;
+      return [{ tabId: id, url: wc.getURL(), title: wc.getTitle() }];
     });
   }
 
@@ -177,13 +182,18 @@ export class TabManager {
   }
 
   snapshot(): TabState[] {
+    this.reapDead();
     return this.order.map((id) => this.stateOf(this.tabs.get(id)!));
   }
 
   dispose(): void {
     for (const tab of this.tabs.values()) {
-      this.window.contentView.removeChildView(tab.view);
-      tab.view.webContents.close();
+      try {
+        this.window.contentView.removeChildView(tab.view);
+        if (this.isLive(tab)) tab.view.webContents.close();
+      } catch {
+        /* view already torn down */
+      }
     }
     this.tabs.clear();
     this.order = [];
@@ -197,16 +207,46 @@ export class TabManager {
     return contentBounds(w, h, this.panelOpen, this.panelWidth);
   }
 
+  /** A tab is live only while its webContents exists and isn't destroyed. */
+  private isLive(tab: Tab): boolean {
+    const wc = tab.view.webContents as WebContents | undefined;
+    return !!wc && !wc.isDestroyed();
+  }
+
+  /**
+   * Drop tabs whose webContents died out-of-band (renderer crash, external
+   * close, a bridge lease torn down via CDP). Without this, snapshot() would
+   * dereference a destroyed view and throw, breaking every tab op.
+   */
+  private reapDead(): void {
+    const dead = [...this.tabs.values()].filter((tab) => !this.isLive(tab));
+    if (dead.length === 0) return;
+    for (const tab of dead) {
+      this.tabs.delete(tab.id);
+      this.order = this.order.filter((t) => t !== tab.id);
+      if (this.activeId === tab.id) this.activeId = null;
+    }
+    if (this.activeId === null) {
+      const next = this.order[this.order.length - 1];
+      if (next) this.activeId = next; // re-point without re-emitting (we're inside snapshot)
+    }
+  }
+
   private stateOf(tab: Tab): TabState {
-    const wc = tab.view.webContents;
     const group = tab.groupId ? this.groups.get(tab.groupId) : undefined;
+    const groupPart = group ? { group } : {};
+    if (!this.isLive(tab)) {
+      // Defensive: a tab racing toward teardown still gets a safe snapshot row.
+      return { id: tab.id, title: 'New Tab', url: '', loading: false, agentControlled: false, ...groupPart };
+    }
+    const wc = tab.view.webContents;
     return {
       id: tab.id,
       title: wc.getTitle() || 'New Tab',
       url: wc.getURL(),
       loading: wc.isLoading(),
       agentControlled: wc.debugger.isAttached(),
-      ...(group ? { group } : {}),
+      ...groupPart,
     };
   }
 
@@ -223,6 +263,14 @@ export class TabManager {
     wc.on('did-start-loading', onChange);
     wc.on('did-stop-loading', onChange);
     wc.on('page-favicon-updated', onChange);
+    // webContents died (crash, external close, bridge lease teardown) — reap the
+    // tab and re-emit so the strip drops it instead of snapshot throwing on it.
+    wc.on('destroyed', () => {
+      if (!this.tabs.has(tab.id)) return;
+      this.emit(); // emit() → snapshot() → reapDead() removes the dead tab
+      if (this.activeId === null && this.tabs.size === 0) this.create();
+    });
+    wc.on('render-process-gone', onChange);
 
     // Links that request a new window open as a new tab instead of a popup.
     wc.setWindowOpenHandler(({ url }) => {
