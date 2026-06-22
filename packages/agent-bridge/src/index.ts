@@ -8,8 +8,10 @@
 
 export { CodexClient, handshake } from './codex-client.js';
 export type { CodexClientOptions } from './codex-client.js';
-export { AgentSession } from './agent-session.js';
+export { AgentSession, approvalDecision } from './agent-session.js';
 export type { AgentSessionOptions } from './agent-session.js';
+export { prepareCodexHome, stripHookSections } from './codex-home.js';
+export type { CodexHome } from './codex-home.js';
 export { mapNotification, mapServerRequest, isHitlRequest } from './event-mapper.js';
 
 // Convenience re-exports of the contracts callers need.

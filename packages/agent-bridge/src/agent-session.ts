@@ -21,8 +21,10 @@ import type {
   SandboxProvider,
   ThreadStartResult,
 } from '@render/protocol';
+import type { ApprovalDecision } from '@render/protocol';
 import { CODEX } from '@render/protocol';
 import { CodexClient, handshake } from './codex-client.js';
+import { type CodexHome, prepareCodexHome } from './codex-home.js';
 import { isHitlRequest, mapNotification, mapServerRequest } from './event-mapper.js';
 
 export interface AgentSessionOptions {
@@ -41,7 +43,27 @@ export interface AgentSessionOptions {
   env?: Record<string, string>;
   /** if true, the caller manages sandbox.start()/dispose() */
   externalSandbox?: boolean;
+  /**
+   * Run codex against a hook-free CODEX_HOME so command/file approvals flow over
+   * the app-server protocol (→ the HITL seam) instead of being swallowed by a
+   * local ~/.codex `PermissionRequest` hook (B2). Best-effort: if the source
+   * home can't be read, falls back to codex's default home. Injects CODEX_HOME
+   * into the sandbox env and cleans up the temp home on dispose().
+   */
+  hookFreeCodexHome?: boolean;
+  /** source home to derive the hook-free home from (defaults to ~/.codex) */
+  codexHomeSource?: string;
   logRaw?: boolean;
+}
+
+/**
+ * Normalize a human allow/deny choice to a codex 0.136.0 approval decision.
+ * codex expects `accept` / `cancel` (NOT `approved`/`denied`) — replying with
+ * the wrong token makes codex fail to deserialize the response and the command
+ * fails to run (B1).
+ */
+export function approvalDecision(allow: boolean): ApprovalDecision {
+  return allow ? 'accept' : 'cancel';
 }
 
 interface PendingHitl {
@@ -54,6 +76,7 @@ export class AgentSession {
   readonly #emitter = new EventEmitter();
   readonly #pendingHitl = new Map<number | string, PendingHitl>();
   #client: CodexClient | null = null;
+  #codexHome: CodexHome | null = null;
   #threadId = '';
   #activeTurnId = '';
   #uxSeq = 0;
@@ -87,7 +110,13 @@ export class AgentSession {
 
     const { sandbox } = this.#opts;
     const provider = sandbox.id;
-    const sandboxEnv = this.#opts.env;
+    let sandboxEnv = this.#opts.env;
+
+    // B2: derive a hook-free CODEX_HOME so approvals flow over the protocol.
+    if (this.#opts.hookFreeCodexHome) {
+      this.#codexHome = await prepareCodexHome(this.#opts.codexHomeSource);
+      if (this.#codexHome) sandboxEnv = { ...sandboxEnv, CODEX_HOME: this.#codexHome.path };
+    }
 
     this.#emit({ kind: 'sandbox', status: 'spawning', provider });
     if (!this.#opts.externalSandbox) await sandbox.start({ env: sandboxEnv });
@@ -160,8 +189,10 @@ export class AgentSession {
 
   /**
    * Resolve a held HITL server-request. `reply` is the codex `result` payload —
-   * e.g. `{ decision: 'approved' }` for an approval or `{ value: '…' }` for a
-   * tool input. Keyed by the requestId carried on the UxMessage origin.
+   * e.g. `{ decision: 'accept' }` (or `{ decision: 'cancel' }` to deny) for an
+   * approval, or `{ value: '…' }` for a tool input. codex 0.136.0 wants
+   * `accept`/`cancel`, NOT `approved`/`denied` — use `approvalDecision()` to
+   * normalize an allow/deny choice. Keyed by the requestId on the UxMessage origin.
    */
   resolvePending(requestId: number | string, reply: unknown): void {
     const pending = this.#pendingHitl.get(requestId);
@@ -173,9 +204,12 @@ export class AgentSession {
   async dispose(): Promise<void> {
     this.#client?.close();
     this.#client = null;
-    for (const p of this.#pendingHitl.values()) p.resolve({ decision: 'denied' });
+    // Deny any still-pending approvals on the way out (B1: codex wants `cancel`).
+    for (const p of this.#pendingHitl.values()) p.resolve({ decision: 'cancel' });
     this.#pendingHitl.clear();
     if (!this.#opts.externalSandbox) await this.#opts.sandbox.dispose();
+    await this.#codexHome?.cleanup();
+    this.#codexHome = null;
   }
 
   // ── HITL seam ────────────────────────────────────────────────────────────
