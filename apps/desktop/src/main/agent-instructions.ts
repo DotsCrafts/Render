@@ -49,11 +49,26 @@ To inspect the page the user is currently looking at in Render, use the built-in
 - Current tab visible text: \`opencli render text -f json\`
 Open a page first with \`render-open <url>\`, then read it with \`opencli render …\`.
 
-### Logged-in sites are automatic
-\`OPENCLI_CDP_ENDPOINT\` is set, so for sites that need a session (zhihu, dianping,
-twitter, taobao…) opencli drives the user's **real, already-logged-in browser**
-over CDP. You never see or need the user's password. If opencli reports that a
-login is required, tell the user to log in to that site in their browser, then retry.
+### Logging in to a site — open a real Render tab with \`opencli <site> login\`
+opencli runs INSIDE Render: its browser/cookie commands drive Render's OWN tabs
+(in an "Agent" tab group), all sharing Render's session. There is NO separate
+browser — Render IS the browser. So:
+
+- When the user asks to **log in** to a site ("帮我登录bilibili", "log me into X"),
+  or when an opencli command reports a login is required (auth required), run:
+
+      opencli <site> login
+
+  This opens that site's login page as a **visible tab in the Agent group** and
+  waits until you're authenticated. Tell the user: "我在 Render 里打开了 <site>
+  登录页，扫码/登录后我继续" — they complete login in that tab (scan QR / type
+  password; you never see the password). The cookie lands in Render's shared
+  session, so your subsequent \`opencli <site> …\` commands are authenticated.
+- After \`login\` returns (authenticated), re-run the original command.
+- Do NOT use \`render-open\` for login and do NOT tell the user to "log in in their
+  own browser" — there is only Render. Use \`opencli <site> login\`.
+- If a site has no \`login\` command (check \`opencli <site> --help\`), fall back to
+  \`render-open <site-login-url>\` so the user can still log in inside Render.
 
 ## Rules
 1. For ANY web search, site lookup, or current/real-time fact: **run opencli**.
