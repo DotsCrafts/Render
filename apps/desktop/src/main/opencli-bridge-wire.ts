@@ -35,6 +35,7 @@ import {
   type BridgeHandle,
   type DispatchCaps,
 } from '@render/opencli-bridge';
+import { RENDER_PARTITION } from './tabs.js';
 
 export interface OpencliBridgeWire {
   /** The opencli profile name Render registered as — point `OPENCLI_PROFILE` here. */
@@ -60,7 +61,9 @@ export interface OpencliBridgeWireDeps {
  * logged via onError and retried by the bridge, never crashing Render boot.
  */
 export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBridgeWire | null {
-  if (process.env.RENDER_OPENCLI_BRIDGE !== '1') return null;
+  // Default ON — Render serves opencli's cookie/browser adapters from its own
+  // Chromium. Set RENDER_OPENCLI_BRIDGE=0 to fall back to the system-Chrome bridge.
+  if (process.env.RENDER_OPENCLI_BRIDGE === '0') return null;
 
   // Each lease gets a distinct off-screen slot so all leased views composite
   // simultaneously (lets a NON-active lease be screenshotted — see the M3 proof).
@@ -72,7 +75,9 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
       // Bridge-owned, off-screen view: parked far off any display, so it cannot
       // disturb the user's tabs or window chrome. One view per `tabs new`.
       const v = new WebContentsView({
-        webPreferences: { sandbox: true, contextIsolation: true },
+        // SAME persistent session as the user's tabs → a cookie set by logging
+        // in on a visible tab is visible to opencli when it drives this view.
+        webPreferences: { sandbox: true, contextIsolation: true, partition: RENDER_PARTITION },
       });
       deps.window.contentView.addChildView(v);
       // Distinct, non-overlapping rect far off-screen; non-zero bounds so the

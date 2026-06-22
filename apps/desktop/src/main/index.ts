@@ -18,7 +18,7 @@ import { registerIpc } from './ipc.js';
 import { runCdpSelfTest } from './cdp-selftest.js';
 import { enableRenderCdp } from './cdp-port.js';
 import { registerRenderOpencliApp } from './opencli-render-app.js';
-import { maybeWireOpencliBridge } from './opencli-bridge-wire.js';
+import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
 
@@ -65,6 +65,13 @@ function wire(win: BrowserWindow): void {
   // browser/cookie adapters to the real logged-in Chromium via the CDP relay.
   const router = createOpencliRouter({ sandbox: selectSandbox(), humanHand });
 
+  // The opencli bridge serves cookie/browser adapters from Render's OWN Chromium
+  // (default ON; set RENDER_OPENCLI_BRIDGE=0 to disable). The agent's opencli must
+  // target Render's profile so dianping/taobao/… drive Render's views (which share
+  // the user's logged-in session) instead of system Chrome.
+  const bridgeEnabled = process.env.RENDER_OPENCLI_BRIDGE !== '0';
+  const bridgeProfile = bridgeEnabled ? renderBridgeProfile() : undefined;
+
   // Brain: codex app-server runs in a SECOND sandbox owned by the runtime.
   const agent = createAgentRuntime({
     emit: (event) => broker.emitAgent(event),
@@ -78,16 +85,18 @@ function wire(win: BrowserWindow): void {
     // the `render-open` tool: open a page in Render's OWN browser, not system Chrome.
     // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange.
     openTab: (url) => tabs.openUrl(url),
+    // route the agent's cookie/browser opencli calls to Render's bridge profile.
+    opencliProfile: bridgeProfile,
     now: () => Date.now(),
   });
 
   const broker = registerIpc({ chrome: win.webContents, tabs, agent, humanHand });
 
-  // Flag-gated (RENDER_OPENCLI_BRIDGE=1), default OFF: serve opencli's /ext
-  // browser backend from Render's OWN Chromium so cookie/browser adapters run
-  // inside Render, never system Chrome. Inert unless the flag is set; verified
-  // via packages/opencli-bridge/harness, not by relaunching this app.
-  const opencliBridge = maybeWireOpencliBridge({ window: win });
+  // Serve opencli's /ext browser backend from Render's OWN Chromium (default ON;
+  // RENDER_OPENCLI_BRIDGE=0 disables). Cookie/browser adapters then run inside
+  // Render — and because the bridge views share the user's `persist:render`
+  // session, a login the user completes in a visible tab is seen by the agent.
+  const opencliBridge = bridgeEnabled ? maybeWireOpencliBridge({ window: win }) : null;
 
   // Guard the chrome shell: a link clicked inside the agent panel must NEVER
   // replace the app UI. Any top-level navigation away from the renderer origin

@@ -15,6 +15,14 @@ import { CHROME, clampPanelWidth, contentBounds, type Bounds } from './layout.js
 export const HOME_URL = 'about:blank';
 const BLANK_URLS = new Set(['', 'about:blank', HOME_URL]);
 
+/**
+ * The persistent session partition shared by the user's tabs AND the opencli
+ * bridge's off-screen views. Sharing it is what makes "log in inside Render"
+ * actually work: a cookie you set by logging in on a visible tab is visible to
+ * the agent's opencli when it drives a bridge view in the SAME session.
+ */
+export const RENDER_PARTITION = 'persist:render';
+
 interface Tab {
   id: string;
   view: WebContentsView;
@@ -45,7 +53,9 @@ export class TabManager {
 
   create(url = HOME_URL, opts: { activate?: boolean } = {}): string {
     const id = `tab-${++this.seq}`;
-    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+    const view = new WebContentsView({
+      webPreferences: { sandbox: true, contextIsolation: true, partition: RENDER_PARTITION },
+    });
     const tab: Tab = { id, view };
 
     this.wireEvents(tab);

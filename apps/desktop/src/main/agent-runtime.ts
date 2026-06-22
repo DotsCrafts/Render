@@ -60,6 +60,12 @@ export interface AgentRuntimeDeps {
   /** open a URL in Render's OWN browser tab (human-hand) — the `render-open` tool */
   openTab?: (url: string) => void;
   /**
+   * The opencli profile the agent's cookie/browser commands route to. When the
+   * bridge is on this is Render's own profile (`render`), so logged-in scraping
+   * happens inside Render. Falls back to OPENCLI_PROFILE / 'default' when unset.
+   */
+  opencliProfile?: string;
+  /**
    * The human-hand CDP relay endpoint. Injected into the sandbox as
    * OPENCLI_CDP_ENDPOINT so the AGENT's own opencli browser-adapter calls reach
    * the user's real logged-in Chromium. Lazy — the relay binds at window boot.
@@ -82,8 +88,8 @@ interface PendingHitl {
 export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   // ux id → codex requestId, so resolveUx can route the human's reply back.
   const pendingHitl = new Map<string, PendingHitl>();
-  // ux id → opencli site, for the needs-login → login round-trip.
-  const pendingLogin = new Map<string, string>();
+  // ux id → { site, loginUrl } for the needs-login → open-real-tab round-trip.
+  const pendingLogin = new Map<string, { site: string; loginUrl?: string }>();
   // sites we've already surfaced a login card for this turn, so a retry storm
   // of AUTH_REQUIRED commands doesn't spam duplicate login surfaces.
   const loginPrompted = new Set<string>();
@@ -166,7 +172,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         if (authNeed && !loginPrompted.has(authNeed.site)) {
           loginPrompted.add(authNeed.site);
           const id = `ux-login-${++uxSeq}`;
-          pendingLogin.set(id, authNeed.site);
+          pendingLogin.set(id, { site: authNeed.site, loginUrl: authNeed.loginUrl });
           deps.emit({
             kind: 'ux',
             message: {
@@ -258,7 +264,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     try {
       const result = await deps.router.invoke(inv);
       const message = opencliResultToUx(result, inv, `ux-oc-${++uxSeq}`, deps.now());
-      if (message.kind === 'login') pendingLogin.set(message.id, inv.site);
+      if (message.kind === 'login') {
+        const loginUrl = (message.spec as { loginUrl?: string }).loginUrl;
+        pendingLogin.set(message.id, { site: inv.site, loginUrl });
+      }
       deps.emit({ kind: 'ux', message });
       deps.emit({ kind: 'turn_completed', status: result.ok ? 'completed' : 'failed' });
     } catch (err) {
@@ -290,10 +299,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 
   const resolveUx = async (id: string, result: UxResult): Promise<void> => {
-    const site = pendingLogin.get(id);
-    if (site) {
+    const login = pendingLogin.get(id);
+    if (login) {
       pendingLogin.delete(id);
-      await resolveLogin(site, result as UxLoginResult);
+      resolveLogin(login.site, login.loginUrl, result as UxLoginResult);
       return;
     }
     const hitl = pendingHitl.get(id);
@@ -302,19 +311,22 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     session.resolvePending(hitl.requestId, uxResultToCodexReply(hitl.kind, result));
   };
 
-  const resolveLogin = async (site: string, result: UxLoginResult): Promise<void> => {
+  const resolveLogin = (site: string, loginUrl: string | undefined, result: UxLoginResult): void => {
     // allow a fresh login card if this site's session lapses again later
     loginPrompted.delete(site);
     if (result.action !== 'login_done') return;
-    try {
-      const { loggedIn, account } = await deps.router.login(site);
-      deps.emit({
-        kind: 'ux',
-        message: loginResultUx(site, loggedIn, account, `ux-oc-${++uxSeq}`, deps.now()),
-      });
-    } catch (err) {
-      deps.emit({ kind: 'error', message: errText(err) });
-    }
+    // REAL login: open the site's login page in Render's OWN browser tab and let
+    // the human log in there. Because that tab and the opencli bridge's views
+    // share the `persist:render` session, the cookie the user sets is visible to
+    // the agent's opencli (routed to the `render` profile) — so a retry succeeds.
+    // We never call router.login (cookie adapter → system Chrome) and never claim
+    // "signed in": we only confirm the tab is open and ask the agent to retry.
+    const url = loginUrl ?? `https://${site}.com`;
+    if (deps.openTab) deps.openTab(url);
+    deps.emit({
+      kind: 'ux',
+      message: loginOpenedUx(site, url, !!deps.openTab, `ux-oc-${++uxSeq}`, deps.now()),
+    });
   };
 
   const dispose = async (): Promise<void> => {
@@ -328,24 +340,23 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   return { submit, steer, cancel, resolveUx, dispose };
 }
 
-function loginResultUx(
-  site: string,
-  loggedIn: boolean,
-  account: string | undefined,
-  id: string,
-  ts: number,
-): UxMessage {
+function loginOpenedUx(site: string, url: string, opened: boolean, id: string, ts: number): UxMessage {
   return {
     id,
     kind: 'render',
     blocking: false,
     ts,
-    spec: {
-      title: loggedIn ? `Signed in to ${site}` : `${site} login not completed`,
-      body: loggedIn
-        ? `Session ready${account ? ` for ${account}` : ''} — re-run the command to use it.`
-        : 'No active session was detected after the login attempt.',
-    },
+    spec: opened
+      ? {
+          title: `Opened ${site} login in Render`,
+          body: `Log in on the tab I just opened — your session stays inside Render. When you're done, ask me to retry and I'll use it.`,
+          items: [{ title: url, url }],
+        }
+      : {
+          title: `Log in to ${site} in Render`,
+          body: `Open this page in a Render tab, log in, then ask me to retry.`,
+          items: [{ title: url, url }],
+        },
   };
 }
 

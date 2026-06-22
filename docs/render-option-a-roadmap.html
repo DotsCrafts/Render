@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Render · Option A 路线图 — 让 opencli 整条生命周期跑在 Render 自己的浏览器里</title>
+<style>
+  :root{
+    --bg:#0d1117;--card:#161b22;--card2:#1c2430;--line:#2a3340;--ink:#e6edf3;--dim:#9aa7b4;
+    --accent:#6ee7b7;--blue:#7aa2f7;--brain:#bb9af7;--danger:#f7768e;--warn:#e0af68;
+    --done:#3fb950;--prog:#d29922;--todo:#6b7684;
+  }
+  @media (prefers-color-scheme: light){
+    :root{--bg:#f6f8fa;--card:#fff;--card2:#f0f3f6;--line:#d8dee4;--ink:#1f2328;--dim:#5a6570;--done:#1a7f37;--prog:#9a6700;--todo:#8a939d;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:30px 20px 80px}
+  h1{font-size:25px;margin:0 0 2px}
+  .lead{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}
+  .sub{color:var(--dim);margin:4px 0 18px}
+  h2{font-size:18px;margin:34px 0 10px;padding-top:12px;border-top:1px solid var(--line)}
+  code{font:13px ui-monospace,Menlo,monospace;background:var(--card2);padding:1px 5px;border-radius:5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:12px 0}
+  .star{border-left:4px solid var(--accent)}
+  .invariant{border-left:4px solid var(--danger)}
+  .m{display:grid;grid-template-columns:96px 1fr;gap:14px;align-items:start;padding:14px 0;border-bottom:1px solid var(--line)}
+  .m:last-child{border-bottom:none}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+  .b-done{background:color-mix(in srgb,var(--done) 18%,transparent);color:var(--done);border:1px solid var(--done)}
+  .b-prog{background:color-mix(in srgb,var(--prog) 18%,transparent);color:var(--prog);border:1px solid var(--prog)}
+  .b-todo{background:color-mix(in srgb,var(--todo) 14%,transparent);color:var(--todo);border:1px solid var(--todo)}
+  .mid{font-weight:700;font-size:15px;margin:0 0 2px}
+  .meta{font-size:12px;color:var(--dim);margin:2px 0 6px}
+  .m ul{margin:4px 0 0;padding-left:18px}.m li{margin:2px 0;font-size:13.5px}
+  .qa{font-size:12px;color:var(--done);font-weight:600}
+  .qa.pending{color:var(--prog)} .qa.todo{color:var(--todo)}
+  .pill{display:inline-block;font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 7px;margin-left:6px}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left}th{background:var(--card2)}
+  footer{margin-top:42px;border-top:1px solid var(--line);padding-top:14px;color:var(--dim);font-size:12.5px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="lead">Render · Option A 路线图</p>
+<h1>让 opencli 的整条生命周期跑在 Render 自己的浏览器里</h1>
+<p class="sub">分支 <code>feat/opencli-bridge</code> · 每个里程碑由独立 QA 对抗式验收 · 监督循环跑到"完全自主"为止</p>
+
+<div class="card star">
+  <strong>北极星</strong>:Render 是一个自包含的 Chromium 浏览器。Agent 的所有浏览器动作(登录、cookie 抓取、导航、截图…)都由 <strong>Render 自己充当 opencli 的浏览器后端</strong>——Render 主进程接 opencli daemon 的 <code>/ext</code>,用自己的 <code>webContents.debugger</code>(CDP)驱动自己的 <code>WebContentsView</code>。<br>
+  做法不是"给 Render 装插件系统"(Electron 结构上跑不了依赖 <code>chrome.debugger</code> 的扩展,做完整插件系统=维护 Chromium fork,见架构决策文档),而是反过来:<strong>让 opencli 连到 Render</strong>。
+</div>
+
+<div class="card invariant">
+  <strong>铁律(贯穿所有里程碑)</strong>:<strong>任何代码、任何测试,都绝不驱动 / 打开 / 关闭你的系统 Chrome。</strong> 全程只用 Render 自己的 <code>render</code> profile。验证"共存"只查 daemon 状态,不真跑 Chrome 搜索。M1 那次"关 Chrome"是错误捷径,已在 M1.5 根除并由 QA 独立证实。
+</div>
+
+<h2>里程碑</h2>
+<div class="card" style="padding-top:4px;padding-bottom:4px">
+
+  <div class="m">
+    <div><span class="badge b-done">✓ DONE</span></div>
+    <div>
+      <p class="mid">M0 · Spike — 验证可行性</p>
+      <p class="meta">commit <code>6a261e7</code> · QA 内含于 spike</p>
+      <ul><li>证明:一个非扩展 WS 客户端能被 daemon 当作活跃浏览器后端,经 CDP 服务一条真实 opencli 命令。Option A 可行。</li></ul>
+      <p class="qa">PASS · 协议解码 + 真实 google 结果</p>
+    </div>
+  </div>
+
+  <div class="m">
+    <div><span class="badge b-done">✓ DONE</span></div>
+    <div>
+      <p class="mid">M1 · 单租约 bridge 包 <code>@render/opencli-bridge</code></p>
+      <p class="meta">commit <code>d0d63a7</code></p>
+      <ul>
+        <li>主进程 <code>/ext</code> WS 客户端 + 单租约 Lease/Target 管理;CDP 传输 = <code>webContents.debugger</code> 打在 <code>WebContentsView</code> 上(可换传输的 <code>CdpTarget</code> 抽象)。</li>
+        <li>实现 navigate / exec / close-window;cdp/cookies/screenshot/tabs/frames 诚实 stub(loud <code>not_implemented</code>)。</li>
+        <li>真实 <code>opencli google search</code> → 14 条结果,全经 Render 自己的 view。</li>
+      </ul>
+      <p class="qa">QA PASS · 系统 Chrome 全程关闭仍出结果(独立 pgrep)· 无泄漏 / 无 mock · typecheck 8 包绿</p>
+    </div>
+  </div>
+
+  <div class="m">
+    <div><span class="badge b-done">✓ DONE</span></div>
+    <div>
+      <p class="mid">M1.5 · Profile 自有 — 不再碰 Chrome <span class="pill">解决你反复看到的"又开 Chrome"</span></p>
+      <p class="meta">commit <code>52a6d1c</code></p>
+      <ul>
+        <li>根因:M1 之所以要"关 Chrome",只因为 Render 注册成了 Chrome 自己的 contextId(<code>3k59e8nw</code>),daemon 撞名就驱逐。</li>
+        <li>修复:Render 用独立 profile <code>render</code> 注册;agent 的 opencli 走 <code>OPENCLI_PROFILE=render</code> 路由到 Render;与系统 Chrome 并存,永不关它;<code>stop()</code> 清理无幽灵。</li>
+      </ul>
+      <p class="qa">QA PASS · 代码无任何关-Chrome 路径(静态)· Chrome PID 全程不掉(独立 pgrep)· <code>render</code> 出 11 真实结果 · daemon 干净 · 10/10 单测</p>
+    </div>
+  </div>
+
+  <div class="m">
+    <div><span class="badge b-prog"><span class="dot" style="background:var(--prog)"></span>进行中</span></div>
+    <div>
+      <p class="mid">M2 · 单租约动作补全</p>
+      <p class="meta">后台构建 agent 运行中 · 全程禁碰 Chrome</p>
+      <ul>
+        <li>补齐 4 个 stub:<strong>cdp</strong>(带白名单)、<strong>cookies</strong>、<strong>screenshot</strong>、<strong>frames</strong>——各自由 <code>webContents.debugger</code>/Electron session 支撑。</li>
+        <li>验收要断言真实 payload(截图真字节、真 cookie、真 frame 树),不只看 <code>ok:true</code>。</li>
+      </ul>
+      <p class="qa pending">QA 待跑(里程碑落地即独立验收;同样禁碰 Chrome)</p>
+    </div>
+  </div>
+
+  <div class="m">
+    <div><span class="badge b-todo">待办</span></div>
+    <div>
+      <p class="mid">M3 · 多租约 / 完整标签生命周期 <span class="pill">spike 标注的最大风险</span></p>
+      <p class="meta">未开始</p>
+      <ul>
+        <li>每个 <code>page</code> 租约一个 <code>WebContentsView</code>;<code>tabs new|select|close|list</code>;跨导航稳定 targetId。</li>
+        <li>owned window / tab-group 语义;<code>windowMode</code>(前台/后台)。</li>
+        <li><code>network-capture-*</code>(Network 域捕获)、<code>wait-download</code>。</li>
+        <li>忠实复刻扩展的租约/target 生命周期,否则多 tab/依赖前台的适配器会在 happy path 之外崩。</li>
+      </ul>
+      <p class="qa todo">QA 待定</p>
+    </div>
+  </div>
+
+  <div class="m">
+    <div><span class="badge b-todo">待办</span></div>
+    <div>
+      <p class="mid">M4 · 产品化 / 加固 — 切换为默认路径</p>
+      <p class="meta">未开始</p>
+      <ul>
+        <li>把 bridge 在 app 里默认开启,取代"走系统 Chrome bridge"的旧路径。</li>
+        <li>退掉症状代码:<code>opencli-auth</code> 登录探测器、两条 CDP 面 fallback、<code>OPENCLI_PROFILE='default'</code> pin。</li>
+        <li>daemon 重连/退避 + UI 状态;协议漂移守卫(对 Command/Result 字段做轻量 schema 校验,opencli 升级时大声失败而非静默)。</li>
+        <li>之前做的 <strong>login HITL 卡</strong>从此开在 <strong>Render 自己的 tab</strong> 里。</li>
+      </ul>
+      <p class="qa todo">QA 待定</p>
+    </div>
+  </div>
+
+  <div class="m">
+    <div><span class="badge b-todo">待办</span></div>
+    <div>
+      <p class="mid">M5 · 完整生命周期 E2E(含登录)= "完全自主"达成</p>
+      <p class="meta">未开始 · 终点</p>
+      <ul>
+        <li>跑通一个**需登录的 cookie 站**完整生命周期(如最初的大众点评:登录 → 搜索 → 商户页),全程在 Render 自己的浏览器、登录态留在 Render 自己的 partition。</li>
+        <li>这就是你说的"Render 内部完全能自主处理所有内容的生命周期"。监督循环到此收。</li>
+      </ul>
+      <p class="qa todo">QA 待定(终验)</p>
+    </div>
+  </div>
+
+</div>
+
+<h2>已就位的支撑工作(非 Option A 主线,但相关)</h2>
+<table>
+  <tr><th>项</th><th>commit</th><th>说明</th></tr>
+  <tr><td>login HITL 卡</td><td><code>576ccbb</code></td><td>agent 的 opencli 命中 AUTH_REQUIRED 时,自动弹登录卡(M4 后这卡开在 Render 自己 tab)。</td></tr>
+  <tr><td>render 调试适配器</td><td><code>2b8c942</code></td><td><code>opencli render</code>:get/text/status/eval/nav/html/snapshot——独立于 bridge 的调试抓手;并自愈 apps.yaml 端口。</td></tr>
+  <tr><td>架构决策文档</td><td><code>02e8336</code></td><td>为什么不做插件系统/不换 Chromium fork、为什么"Render 当后端"是正解。</td></tr>
+</table>
+
+<h2>运作方式</h2>
+<div class="card">
+  <ul style="margin:0;padding-left:18px">
+    <li><strong>监督循环</strong>(你设的 <code>/loop</code>,每 5 分钟):查构建进度;里程碑一落地就<strong>派独立 QA 对抗式验收</strong>;QA PASS 才推进下一里程碑。</li>
+    <li><strong>QA 准则</strong>:DONE 只是声明,QA 的真跑才算数;不收 mock;<strong>每次都核验"系统 Chrome 全程未被驱动/关闭"</strong>。</li>
+    <li><strong>收敛条件</strong>:M5 通过(完整登录生命周期全在 Render 内)→ 循环停止。</li>
+  </ul>
+</div>
+
+<footer>
+  Render Option A 路线图 · 截至当前:M0/M1/M1.5 已 QA PASS,M2 构建中,M3–M5 待办。<br>
+  系统 Chrome 现状:仍装着 opencli 扩展、作为一个 profile 连在 daemon 上(你自己的安装)。Render 产品路径永不碰它;若要彻底零接触,可让 Render 当默认 profile 或卸掉 Chrome 扩展。
+</footer>
+</div>
+</body>
+</html>
