@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 interface Props {
   busy: boolean;
@@ -10,7 +10,7 @@ interface Props {
  * The always-visible primary control, pinned bottom-center. Focused on mount and
  * re-focused after each submit so the user can keep talking to the agent.
  */
-export function FloatingInput({ busy, onSubmit, onCancel }: Props): JSX.Element {
+export function FloatingInput({ busy, onSubmit, onCancel }: Props): ReactElement {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 

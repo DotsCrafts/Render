@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import type { TabState } from '@render/protocol';
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
   onReload: () => void;
 }
 
-export function Omnibox({ activeTab, onNavigate, onBack, onForward, onReload }: Props): JSX.Element {
+export function Omnibox({ activeTab, onNavigate, onBack, onForward, onReload }: Props): ReactElement {
   const [value, setValue] = useState('');
   const [editing, setEditing] = useState(false);
 

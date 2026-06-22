@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { useRenderState } from './useRenderState.js';
 import { TabStrip } from './components/TabStrip.js';
 import { Omnibox } from './components/Omnibox.js';
@@ -9,7 +10,7 @@ import { AgentPanel } from './components/AgentPanel.js';
  * WebContentsViews painted by the main process into the `.stage` region; this
  * React tree only draws the surrounding chrome and talks to main over IPC.
  */
-export function App(): JSX.Element {
+export function App(): ReactElement {
   const { tabs, activeTab, events, busy, actions } = useRenderState();
 
   return (
@@ -35,7 +36,7 @@ export function App(): JSX.Element {
         <div className="hint">{tabs.length === 0 ? 'opening tab…' : ''}</div>
       </main>
 
-      <AgentPanel events={events} />
+      <AgentPanel events={events} onResolve={actions.resolveUx} />
 
       <div className="inputband">
         <FloatingInput busy={busy} onSubmit={actions.submit} onCancel={actions.cancel} />

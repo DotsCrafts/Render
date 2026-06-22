@@ -12,13 +12,13 @@ import { IPC, type AgentEvent, type TabState, type UxResult } from '@render/prot
 import type { HumanHandHandle } from '@render/cdp-human-hand';
 import { CHROME_IPC } from '../shared/chrome-channels.js';
 import type { TabManager } from './tabs.js';
-import type { AgentStub } from './agent-stub.js';
+import type { AgentRuntime } from './agent-runtime.js';
 
 export interface IpcDeps {
   /** the chrome renderer that receives emit() events */
   chrome: WebContents;
   tabs: TabManager;
-  agent: AgentStub;
+  agent: AgentRuntime;
   humanHand: HumanHandHandle;
 }
 
@@ -43,6 +43,7 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.steerTurn]: (_e, text: string) => agent.steer(text),
     [IPC.cancelTurn]: () => agent.cancel(),
     [IPC.resolveUx]: (_e, id: string, result: UxResult) => agent.resolveUx(id, result),
+    // (agent runtime methods are async; ipcMain.handle awaits the returned promise)
 
     [IPC.tabNavigate]: (_e, payload: { tabId: string; url: string }) =>
       tabs.navigate(payload.tabId, payload.url),

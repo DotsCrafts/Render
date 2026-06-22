@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import type { TabState } from '@render/protocol';
 
 interface Props {
@@ -8,7 +9,7 @@ interface Props {
   onNew: () => void;
 }
 
-export function TabStrip({ tabs, activeId, onActivate, onClose, onNew }: Props): JSX.Element {
+export function TabStrip({ tabs, activeId, onActivate, onClose, onNew }: Props): ReactElement {
   return (
     <div className="tabstrip">
       {tabs.map((tab) => (

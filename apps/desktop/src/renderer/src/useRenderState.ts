@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentEvent, TabState } from '@render/protocol';
+import type { AgentEvent, TabState, UxResult } from '@render/protocol';
 
 export interface RenderState {
   tabs: TabState[];
@@ -16,6 +16,7 @@ export interface RenderState {
   actions: {
     submit: (text: string) => void;
     cancel: () => void;
+    resolveUx: (id: string, result: UxResult) => void;
     navigate: (url: string) => void;
     newTab: () => void;
     closeTab: (id: string) => void;
@@ -71,6 +72,10 @@ export function useRenderState(): RenderState {
     if (trimmed) void window.render.submitPrompt(trimmed);
   }, []);
   const cancel = useCallback(() => void window.render.cancelTurn(), []);
+  const resolveUx = useCallback(
+    (id: string, result: UxResult) => void window.render.resolveUx(id, result),
+    [],
+  );
   const navigate = useCallback((url: string) => {
     const id = activeRef.current;
     if (id) void window.render.tabNavigate(id, url);
@@ -102,6 +107,17 @@ export function useRenderState(): RenderState {
     activeTab,
     events,
     busy,
-    actions: { submit, cancel, navigate, newTab, closeTab, activateTab, back, forward, reload },
+    actions: {
+      submit,
+      cancel,
+      resolveUx,
+      navigate,
+      newTab,
+      closeTab,
+      activateTab,
+      back,
+      forward,
+      reload,
+    },
   };
 }

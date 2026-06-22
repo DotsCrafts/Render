@@ -10,8 +10,10 @@
 import { app, BrowserWindow } from 'electron';
 import { join } from 'node:path';
 import { createHumanHand } from '@render/cdp-human-hand';
+import { selectSandbox } from '@render/sandbox';
+import { createOpencliRouter } from '@render/opencli-router';
 import { TabManager } from './tabs.js';
-import { createAgentStub } from './agent-stub.js';
+import { createAgentRuntime } from './agent-runtime.js';
 import { registerIpc } from './ipc.js';
 import { runCdpSelfTest } from './cdp-selftest.js';
 
@@ -52,8 +54,15 @@ function wire(win: BrowserWindow): void {
     listTabs: () => tabs.listTabs(),
   });
 
-  const agent = createAgentStub({
+  // App hand: opencli adapters run in their own sandbox (public/API) and route
+  // browser/cookie adapters to the real logged-in Chromium via the CDP relay.
+  const router = createOpencliRouter({ sandbox: selectSandbox(), humanHand });
+
+  // Brain: codex app-server runs in a SECOND sandbox owned by the runtime.
+  const agent = createAgentRuntime({
     emit: (event) => broker.emitAgent(event),
+    sandbox: selectSandbox(),
+    router,
     now: () => Date.now(),
   });
 
@@ -70,7 +79,8 @@ function wire(win: BrowserWindow): void {
 
   win.on('closed', () => {
     broker.dispose();
-    agent.dispose();
+    void agent.dispose();
+    void router.dispose();
     tabs.dispose();
     void humanHand.dispose();
   });
