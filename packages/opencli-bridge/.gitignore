@@ -1,0 +1,3 @@
+harness/evidence/
+*.bundle.mjs
+node_modules/
