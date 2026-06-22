@@ -9,7 +9,7 @@
  */
 
 import { WebContentsView, type BaseWindow, type WebContents } from 'electron';
-import type { TabState } from '@render/protocol';
+import type { TabState, TabGroupInfo } from '@render/protocol';
 import { CHROME, clampPanelWidth, contentBounds, type Bounds } from './layout.js';
 
 export const HOME_URL = 'about:blank';
@@ -26,6 +26,8 @@ export const RENDER_PARTITION = 'persist:render';
 interface Tab {
   id: string;
   view: WebContentsView;
+  /** group this tab belongs to, if any (e.g. the agent's owned tab group). */
+  groupId?: string;
 }
 
 export interface TabManagerDeps {
@@ -38,6 +40,8 @@ export class TabManager {
   private readonly window: BaseWindow;
   private readonly onChange: (tabs: TabState[]) => void;
   private readonly tabs = new Map<string, Tab>();
+  /** group id → group metadata (label/color), surfaced in every snapshot. */
+  private readonly groups = new Map<string, TabGroupInfo>();
   private order: string[] = [];
   private activeId: string | null = null;
   private panelOpen = true;
@@ -51,12 +55,17 @@ export class TabManager {
 
   // ── public API ─────────────────────────────────────────────────────────────
 
-  create(url = HOME_URL, opts: { activate?: boolean } = {}): string {
+  /** Register (or update) a tab group so tabs can reference it by id. */
+  ensureGroup(info: TabGroupInfo): void {
+    this.groups.set(info.id, info);
+  }
+
+  create(url = HOME_URL, opts: { activate?: boolean; groupId?: string } = {}): string {
     const id = `tab-${++this.seq}`;
     const view = new WebContentsView({
       webPreferences: { sandbox: true, contextIsolation: true, partition: RENDER_PARTITION },
     });
-    const tab: Tab = { id, view };
+    const tab: Tab = { id, view, ...(opts.groupId ? { groupId: opts.groupId } : {}) };
 
     this.wireEvents(tab);
     this.window.contentView.addChildView(view);
@@ -190,12 +199,14 @@ export class TabManager {
 
   private stateOf(tab: Tab): TabState {
     const wc = tab.view.webContents;
+    const group = tab.groupId ? this.groups.get(tab.groupId) : undefined;
     return {
       id: tab.id,
       title: wc.getTitle() || 'New Tab',
       url: wc.getURL(),
       loading: wc.isLoading(),
       agentControlled: wc.debugger.isAttached(),
+      ...(group ? { group } : {}),
     };
   }
 

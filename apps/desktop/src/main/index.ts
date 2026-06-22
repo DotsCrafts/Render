@@ -94,9 +94,10 @@ function wire(win: BrowserWindow): void {
 
   // Serve opencli's /ext browser backend from Render's OWN Chromium (default ON;
   // RENDER_OPENCLI_BRIDGE=0 disables). Cookie/browser adapters then run inside
-  // Render — and because the bridge views share the user's `persist:render`
-  // session, a login the user completes in a visible tab is seen by the agent.
-  const opencliBridge = bridgeEnabled ? maybeWireOpencliBridge({ window: win }) : null;
+  // Render as REAL tabs in the agent's owned tab group: `<site> login` opens a
+  // visible tab the user logs into, and because every bridge tab shares the
+  // `persist:render` session, that login authenticates the agent's commands.
+  const opencliBridge = bridgeEnabled ? maybeWireOpencliBridge({ tabs }) : null;
 
   // Guard the chrome shell: a link clicked inside the agent panel must NEVER
   // replace the app UI. Any top-level navigation away from the renderer origin

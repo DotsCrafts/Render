@@ -11,19 +11,24 @@
  * unqualified default keeps routing to system Chrome. Inert by default: with the
  * flag unset this module does nothing and nothing is constructed.
  *
- * Milestone 3 is MULTI-LEASE: the bridge owns a registry of bridge-only
- * `WebContentsView`s (one per `tabs new`), each its own CDP target with a stable
- * targetId, all added to ONE shared off-screen compositing host (never shown over
- * the user's tabs), each at a distinct non-overlapping off-screen rect so a
- * non-active lease can still be screenshotted. Network capture (per-lease) and
- * wait-download (CDP Browser.setDownloadBehavior into a temp dir) are wired via
- * DispatchCaps. Matches the daemon's owned-tab-group + windowMode model.
+ * Milestone 3 is MULTI-LEASE: the bridge owns a registry of leases (one per
+ * `tabs new`), each its own CDP target with a stable targetId. Each lease is a
+ * REAL, VISIBLE Render tab minted through the TabManager — NOT an off-screen
+ * phantom view. This is load-bearing for interactive flows like login: when
+ * opencli runs `<site> login` it opens the login page in a tab the user can SEE
+ * and complete (scan a QR, type a password); the cookie lands in the shared
+ * `persist:render` session, so the agent's subsequent opencli commands (same
+ * session) are authenticated. "Render 是浏览器" — the agent drives real tabs.
+ * Network capture (per-lease) and wait-download (CDP Browser.setDownloadBehavior
+ * into a temp dir) are wired via DispatchCaps.
  *
- * Verification is the standalone harness (packages/opencli-bridge/harness), NOT a
- * relaunch of the user's app — this hook is exercised there in isolation.
+ * (Tradeoff vs M3's off-screen views: a NON-active lease is `setVisible(false)`
+ * and may not composite, so screenshotting a background lease can be blank —
+ * acceptable; the active lease, which is what login/interaction needs, is
+ * always visible. The standalone harness still exercises the off-screen path.)
  */
 
-import { WebContentsView, type BaseWindow } from 'electron';
+import type { WebContents } from 'electron';
 import { mkdtempSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -35,7 +40,6 @@ import {
   type BridgeHandle,
   type DispatchCaps,
 } from '@render/opencli-bridge';
-import { RENDER_PARTITION } from './tabs.js';
 
 export interface OpencliBridgeWire {
   /** The opencli profile name Render registered as — point `OPENCLI_PROFILE` here. */
@@ -50,10 +54,25 @@ export function renderBridgeProfile(): string {
   return override && override.length > 0 ? override : RENDER_CONTEXT_ID;
 }
 
-export interface OpencliBridgeWireDeps {
-  /** The host window the bridge's off-screen view attaches to. */
-  window: BaseWindow;
+/**
+ * The slice of TabManager the bridge needs: register its group, mint visible
+ * grouped tabs, reach their webContents, and close them. Kept structural so the
+ * wire stays decoupled (TabManager satisfies it).
+ */
+export interface BridgeTabHost {
+  ensureGroup(info: { id: string; label: string; color: string }): void;
+  create(url?: string, opts?: { activate?: boolean; groupId?: string }): string;
+  getTarget(id: string): WebContents | undefined;
+  close(id: string): void;
 }
+
+export interface OpencliBridgeWireDeps {
+  /** Render's tab manager — the bridge mints its owned tab group through it. */
+  tabs: BridgeTabHost;
+}
+
+/** The agent's owned tab group — all of a session's bridge leases live here. */
+const AGENT_GROUP = { id: 'agent', label: 'Agent', color: '#7c93ff' } as const;
 
 /**
  * Returns `null` when the flag is off (the default) — callers treat null as
@@ -65,36 +84,20 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
   // Chromium. Set RENDER_OPENCLI_BRIDGE=0 to fall back to the system-Chrome bridge.
   if (process.env.RENDER_OPENCLI_BRIDGE === '0') return null;
 
-  // Each lease gets a distinct off-screen slot so all leased views composite
-  // simultaneously (lets a NON-active lease be screenshotted — see the M3 proof).
-  const VIEW_W = 600;
-  const VIEW_H = 800;
-  let slot = 0;
+  // Each lease is a REAL, VISIBLE Render tab in the agent's owned tab group.
+  // `tabs new` (incl. the lazy first lease of a `<site> login`) opens an active
+  // tab the user can SEE and interact with — so login QR/password works — and
+  // the page shares the user's `persist:render` session, so the cookie it sets
+  // authenticates the agent's later opencli commands.
+  deps.tabs.ensureGroup(AGENT_GROUP);
   const provider = createMultiWebContentsLeaseProvider({
     mintView: async () => {
-      // Bridge-owned, off-screen view: parked far off any display, so it cannot
-      // disturb the user's tabs or window chrome. One view per `tabs new`.
-      const v = new WebContentsView({
-        // SAME persistent session as the user's tabs → a cookie set by logging
-        // in on a visible tab is visible to opencli when it drives this view.
-        webPreferences: { sandbox: true, contextIsolation: true, partition: RENDER_PARTITION },
-      });
-      deps.window.contentView.addChildView(v);
-      // Distinct, non-overlapping rect far off-screen; non-zero bounds so the
-      // page composites (required for screenshots of non-active leases).
-      v.setBounds({ x: -10000 + (slot % 2) * VIEW_W, y: -10000 + Math.floor(slot / 2) * VIEW_H, width: VIEW_W, height: VIEW_H });
-      slot += 1;
-      await v.webContents.loadURL('about:blank');
+      const id = deps.tabs.create('about:blank', { activate: true, groupId: AGENT_GROUP.id });
+      const webContents = deps.tabs.getTarget(id);
+      if (!webContents) throw new Error('bridge: minted tab has no webContents');
       return {
-        webContents: v.webContents,
-        destroy: () => {
-          try {
-            deps.window.contentView.removeChildView(v);
-            v.webContents.close();
-          } catch {
-            /* already gone */
-          }
-        },
+        webContents,
+        destroy: () => deps.tabs.close(id),
       };
     },
   });

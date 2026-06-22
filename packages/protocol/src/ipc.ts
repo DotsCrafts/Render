@@ -24,6 +24,18 @@ export type AgentEvent =
 
 // ── Browser tab / human-hand state (main → renderer) ─────────────────────────
 
+/**
+ * A tab group — Chrome-style. opencli's "owned tab group" (one agent session's
+ * leases) is surfaced as a group so the user can see, at a glance, which tabs
+ * the agent opened (e.g. a site login tab + the pages it's scraping).
+ */
+export interface TabGroupInfo {
+  id: string;
+  label: string;
+  /** CSS color for the group accent (border / chip). */
+  color: string;
+}
+
 export interface TabState {
   id: string;
   title: string;
@@ -32,6 +44,8 @@ export interface TabState {
   loading: boolean;
   /** true when the agent (CDP human-hand) is actively driving this tab */
   agentControlled: boolean;
+  /** present when this tab belongs to a tab group (e.g. the agent's session). */
+  group?: TabGroupInfo;
 }
 
 export const IPC = {
