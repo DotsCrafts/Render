@@ -83,6 +83,25 @@ function writeSecret(authJson: string): void {
 
 // ── config.toml generation ─────────────────────────────────────────────────────
 
+/**
+ * Drop `model_provider = …` + every `[model_providers.*]` section. Render OWNS
+ * the provider now, so when we inherit the user's ~/.codex/config.toml we must
+ * strip their old provider/base_url — otherwise an empty base_url in Render's
+ * settings would silently fall back to whatever ~/.codex had (e.g. a stale
+ * proxy endpoint), making the settings panel a lie.
+ */
+function stripProviderConfig(toml: string): string {
+  const out: string[] = [];
+  let inProvider = false;
+  for (const line of toml.split('\n')) {
+    if (/^\s*\[/.test(line)) inProvider = /^\s*\[model_providers/.test(line);
+    if (inProvider) continue;
+    if (/^\s*model_provider\s*=/.test(line)) continue;
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 function configToml(p: ProviderConfig): string {
   // No custom base_url → let codex use its built-in OpenAI provider defaults.
   if (!p.baseUrl || p.baseUrl.trim() === '') return '';
@@ -228,7 +247,9 @@ export function createCodexProvider(): CodexProvider {
     // Merge Render's provider block with any non-hook config the user already has.
     let base = '';
     try {
-      base = stripHookSections(await readFile(join(homedir(), '.codex', 'config.toml'), 'utf8'));
+      const raw = await readFile(join(homedir(), '.codex', 'config.toml'), 'utf8');
+      // strip hooks (protocol-level HITL) AND the old provider block (Render owns it)
+      base = stripProviderConfig(stripHookSections(raw));
     } catch {
       /* none — fine */
     }
