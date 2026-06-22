@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Render — Architecture Re-evaluation: extensions, the browser substrate, and the "stay in Render" invariant</title>
+<style>
+  :root{
+    --bg:#0d1117; --card:#161b22; --card2:#1c2430; --line:#2a3340; --ink:#e6edf3; --dim:#9aa7b4;
+    --accent:#6ee7b7; --blue:#7aa2f7; --human:#7dcfff; --brain:#bb9af7; --danger:#f7768e; --warn:#e0af68;
+    --ok:#3fb950; --no:#f85149; --maybe:#d29922;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fa; --card:#fff; --card2:#f0f3f6; --line:#d8dee4; --ink:#1f2328; --dim:#5a6570;
+      --ok:#1a7f37; --no:#cf222e; --maybe:#9a6700; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:26px;line-height:1.25;margin:0 0 4px}
+  h2{font-size:19px;margin:38px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:15px;margin:20px 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+  p,li{color:var(--ink)} .dim{color:var(--dim)}
+  code,kbd{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card2);padding:1px 5px;border-radius:5px}
+  pre{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow:auto}
+  pre code{background:none;padding:0}
+  .sub{color:var(--dim);margin:0 0 20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:14px 0}
+  .verdict{border-left:4px solid var(--accent)}
+  .grid{display:grid;gap:14px}
+  @media(min-width:760px){.cols-3{grid-template-columns:1fr 1fr 1fr}.cols-2{grid-template-columns:1fr 1fr}}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:8px 0}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--card2);font-weight:600}
+  .yes{color:var(--ok);font-weight:600}.no{color:var(--no);font-weight:600}.mb{color:var(--maybe);font-weight:600}
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+  .rec{border:1px solid var(--accent);background:linear-gradient(0deg,transparent,rgba(110,231,183,.06));border-radius:14px;padding:16px 20px}
+  .kill{border-left:4px solid var(--danger)}
+  svg{max-width:100%;height:auto;display:block;margin:6px 0}
+  .mono{font:12.5px/1.5 ui-monospace,Menlo,monospace}
+  ul{margin:6px 0 6px 0;padding-left:20px} li{margin:3px 0}
+  .tag{font-size:11px;color:var(--dim)}
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:16px;color:var(--dim);font-size:12.5px}
+  a{color:var(--blue)}
+  .lead{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="lead">Render · Architecture Decision Record</p>
+<h1>Should Render integrate a Chrome plugin system — and is the whole architecture sound?</h1>
+<p class="sub">Re-think prompted by one hard invariant: <strong>Render is a browser. The agent must never jump to another browser. Login &amp; cookie-scraping happen inside Render — or building a browser is pointless.</strong></p>
+
+<div class="card verdict">
+  <h3 style="margin-top:0">Verdict (TL;DR)</h3>
+  <ul>
+    <li><strong>Don't build a plugin system to run opencli's extension.</strong> Electron structurally cannot host it — the extension lives on <code>chrome.debugger</code>, which Electron's extension API does not implement, cannot shim into an MV3 service worker, and has no roadmap for. A <em>full</em> plugin system = a Chromium fork = a permanent ~monthly rebase tax + a browser-platform team. Overkill for our actual need.</li>
+    <li><strong>"Just point <code>OPENCLI_CDP_ENDPOINT</code> at Render" does NOT solve it.</strong> opencli's own source routes <em>only registered Electron-app adapters</em> through CDP; every cookie/site adapter (dianping, taobao, zhihu…) is hardwired to the daemon+extension bridge. Proven below.</li>
+    <li><strong>The right move is the inverse of a plugin system: make Render the browser opencli drives.</strong> Render serves opencli's daemon browser-backend (<code>/ext</code>) over its <em>own</em> tabs via <code>webContents.debugger</code> (CDP). No extension, no fork, no Chromium fork. The leak to system Chrome becomes structurally impossible.</li>
+    <li>The <strong>brain / hands / sandbox / json-render spine is sound</strong> and worth keeping. The two-CDP-plane split, the login-detector, the <code>apps.yaml</code> dance and the profile pin are all <em>symptoms of one seam</em> — cookie adapters binding to a backend Electron can't host. Fix the seam; the complexity collapses.</li>
+  </ul>
+</div>
+
+<h2>1 · How real browsers run Chrome extensions (and what that costs)</h2>
+<p>The capability Render needs is the hardest one: an MV3 extension that drives tabs via <code>chrome.debugger</code>/CDP. That is exactly the API the shim ecosystem cannot provide and Electron has no plan for. A Feb 2026 Electron bug (<span class="mono">#49830</span>) shows the structurally-identical <em>Claude in Chrome</em> extension failing to load in Electron for precisely this reason.</p>
+
+<table>
+<thead><tr>
+  <th>Substrate</th><th>Full extension system</th><th><code>chrome.debugger</code> for extensions</th><th>MV3 service workers</th><th>Build / maintenance</th><th>Fit for Render</th>
+</tr></thead>
+<tbody>
+  <tr><td><strong>Chromium fork</strong><br><span class="tag">Brave · Arc · Dia · Vivaldi · Opera · Edge</span></td><td class="yes">Yes (free)</td><td class="yes">Yes (free)</td><td class="yes">Yes</td><td class="no">Very high — ~4-wk rebase cadence; ≥1–2 teams; Extended-Stable channel to survive</td><td class="yes">Meets fully</td></tr>
+  <tr><td><strong>CEF</strong> (Chrome runtime)</td><td class="mb">Partial, growing</td><td class="no">Not for extensions (host-side CDP only)</td><td class="mb">Partial</td><td class="no">High — you build much browser plumbing</td><td class="mb">Unproven / risky</td></tr>
+  <tr><td><strong>WebView2</strong></td><td class="mb">Edge add-ons, partial</td><td class="no">No (host-side CDP only)</td><td class="mb">Murky</td><td class="mb">Medium — but Windows-only</td><td class="no">Does not fit</td></tr>
+  <tr><td><strong>Electron 35+ &amp; electron-chrome-extensions</strong><br><span class="tag">Maddock's lib — the de-facto standard</span></td><td class="mb">Subset + JS-injected APIs</td><td class="no"><strong>No — and no roadmap</strong></td><td class="mb">SW <em>registration</em> only (35+)</td><td class="ok">Low–medium</td><td class="no">Does not meet — the load-bearing API is absent</td></tr>
+  <tr><td><strong>Electron 33</strong> (Render today)</td><td class="no">Smaller subset</td><td class="no">No</td><td class="no">Pre-SW plumbing</td><td>—</td><td class="no">Does not meet</td></tr>
+</tbody>
+</table>
+<p class="dim" style="font-size:13px">Telling datapoint: <strong>Wavebox</strong> — a productivity browser whose product <em>is</em> extensions — abandoned Electron for a native Chromium foundation specifically because "Electron lacked essential browser-type functionality such as PDF rendering and extension support." <strong>SigmaOS</strong> (hand-rolled its own extension API on WebKit) is the cautionary tale: real compatibility gaps land exactly on the advanced APIs (<code>debugger</code>, <code>sidePanel</code>, <code>tabGroups</code>) we'd depend on. Building your own plugin system reproduces those gaps; inheriting Chromium's avoids them — at fork cost.</p>
+
+<h2>2 · The decisive fact: opencli only CDP-drives <em>registered apps</em>, never cookie sites</h2>
+<p>This settles the cheap-path debate. From opencli's installed source (<code>@jackwener/opencli/dist/src/runtime.js</code>):</p>
+<pre><code>export function getBrowserFactory(site) {
+  if (site &amp;&amp; isElectronApp(site)) return CDPBridge;   // honors OPENCLI_CDP_ENDPOINT
+  return BrowserBridge;                                  // daemon + MV3 extension (port 19825)
+}</code></pre>
+<ul>
+  <li><code>OPENCLI_CDP_ENDPOINT</code> is consumed <strong>only by <code>CDPBridge</code></strong> (<code>browser/cdp.js</code>), and <code>CDPBridge</code> is chosen <strong>only when <code>isElectronApp(site)</code></strong> — the registry of Electron apps (cursor, codex, trae, … and our hand-registered <code>render</code>).</li>
+  <li>Every <strong>cookie / site adapter</strong> (dianping, taobao, zhihu, weibo, xiaohongshu, …) falls to <code>BrowserBridge</code> → the daemon → the extension in <em>some</em> Chrome. There is no per-site override to force CDP.</li>
+  <li>This matches our live evidence: with <code>OPENCLI_CDP_ENDPOINT</code> set in the sandbox, <code>opencli dianping search</code> still returned <code>AUTH_REQUIRED … sign in to dianping.com <strong>in this profile</strong></code> — i.e. it used the bridge profile, not Render's tab.</li>
+</ul>
+<p><strong>Consequence:</strong> the only way a cookie adapter can drive Render is if <em>Render is the browser the daemon's bridge talks to.</em> Pointing an env var at Render, hosting the extension in Render, and forking the extension are all either impossible (§1) or don't apply (§2). That leaves one shape.</p>
+
+<h2>3 · Re-evaluating Render's architecture</h2>
+<div class="grid cols-2">
+  <div class="card"><h3 style="margin-top:0">Sound — keep</h3>
+    <ul>
+      <li><strong>Codex brain</strong> over JSONL app-server: clean, swappable process boundary.</li>
+      <li><strong>SandboxProvider seam</strong> (local-seatbelt ↔ e2b): genuinely provider-agnostic.</li>
+      <li><strong>Real CDP on our own tabs</strong> via <code>webContents.debugger</code> — the asset everything should build on.</li>
+      <li><strong>json-render as the only renderer contract</strong>: catalog-whitelisted, structure-as-injection-boundary.</li>
+      <li><strong>Trust boundary</strong>: Plane-1 model keys in main; Plane-2 site creds never enter the sandbox.</li>
+    </ul>
+  </div>
+  <div class="card"><h3 style="margin-top:0">Shaky — the single leak</h3>
+    <ul>
+      <li>Assumption "opencli will drive Render's browser" only holds for the <em>bespoke</em> <code>render get/text</code> app adapter — not for cookie sites.</li>
+      <li>The relay + two CDP planes + <code>apps.yaml</code> registration + <code>OPENCLI_PROFILE</code> pin + the new login-detector exist <em>only</em> to route around opencli's cookie backend living outside Render.</li>
+      <li>It's <strong>architectural, not patchable</strong>: no env var / yaml / prompt makes a third-party adapter abandon its hardwired bridge.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Where the invariant breaks</h3>
+<svg viewBox="0 0 920 220" role="img" aria-label="Current routing: cookie adapters leak to system Chrome">
+  <style>
+    .b{fill:var(--card2);stroke:var(--line)} .t{fill:var(--ink);font:13px ui-monospace,Menlo,monospace}
+    .ok{stroke:var(--ok)} .bad{stroke:var(--no)} .lab{fill:var(--dim);font:11px sans-serif}
+    .ar{stroke:var(--dim);stroke-width:1.5;fill:none;marker-end:url(#a)}
+    .arok{stroke:var(--ok);stroke-width:2;fill:none;marker-end:url(#ag)}
+    .arbad{stroke:var(--no);stroke-width:2;fill:none;marker-end:url(#ar)}
+  </style>
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--dim)"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--ok)"/></marker>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--no)"/></marker>
+  </defs>
+  <rect class="b" x="10" y="80" width="150" height="48" rx="8"/><text class="t" x="26" y="100">codex (brain)</text><text class="lab" x="26" y="116">in sandbox</text>
+  <rect class="b" x="200" y="80" width="150" height="48" rx="8"/><text class="t" x="216" y="100">opencli</text><text class="lab" x="216" y="116">getBrowserFactory()</text>
+
+  <rect class="b ok" x="430" y="14" width="200" height="44" rx="8" style="stroke-width:2"/><text class="t" x="446" y="34">render get/text</text><text class="lab" x="446" y="50">→ CDPBridge</text>
+  <rect class="b ok" x="430" y="80" width="200" height="44" rx="8" style="stroke-width:2"/><text class="t" x="446" y="100">public/API sites</text><text class="lab" x="446" y="116">→ sandbox (headless)</text>
+  <rect class="b bad" x="430" y="146" width="200" height="44" rx="8" style="stroke-width:2"/><text class="t" x="446" y="166">dianping / taobao…</text><text class="lab" x="446" y="182">→ BrowserBridge</text>
+
+  <rect class="b ok" x="700" y="14" width="200" height="44" rx="8" style="stroke-width:2"/><text class="t" x="716" y="40" fill="var(--ok)">Render's own tab ✓</text>
+  <rect class="b" x="700" y="80" width="200" height="44" rx="8"/><text class="t" x="716" y="106">sandbox process ✓</text>
+  <rect class="b bad" x="700" y="146" width="200" height="44" rx="8" style="stroke-width:2"/><text class="t" x="716" y="172" fill="var(--no)">SYSTEM Chrome ✗</text>
+
+  <path class="ar" d="M160,104 L196,104"/>
+  <path class="arok" d="M350,98 C390,80 400,46 426,40"/>
+  <path class="arok" d="M350,104 L426,104"/>
+  <path class="arbad" d="M350,110 C390,128 400,162 426,168"/>
+  <path class="arok" d="M630,36 L696,36"/>
+  <path class="arok" d="M630,102 L696,102"/>
+  <path class="arbad" d="M630,168 L696,168"/>
+  <text class="lab" x="660" y="208" fill="var(--no)">the leak — daemon :19825 → extension → a browser the user can't see inside Render</text>
+</svg>
+
+<h2>4 · Options &amp; recommendation</h2>
+<table>
+<thead><tr><th>Option</th><th>Honors invariant</th><th>Effort</th><th>Risk</th><th>Maintenance</th></tr></thead>
+<tbody>
+  <tr style="background:linear-gradient(0deg,transparent,rgba(110,231,183,.07))">
+    <td><strong>A · Render <em>is</em> the browser backend</strong><br><span class="tag">serve opencli's daemon <code>/ext</code> over our own tabs via <code>webContents.debugger</code></span></td>
+    <td class="yes">Yes — by construction</td><td class="mb">Low–Med (relay &amp; CDP plumbing already exist)</td><td class="mb">Med — <code>/ext</code> is opencli-private &amp; versioned; may drift</td><td class="ok">Low — one protocol to track</td></tr>
+  <tr><td><strong>B · Fork the extension + <code>chrome.debugger</code> shim</strong></td><td class="mb">Yes if shim is complete</td><td class="no">High</td><td class="no">High — silent break on any unshimmed API</td><td class="no">High — a fork + a shim vs two moving targets</td></tr>
+  <tr><td><strong>C · Change substrate</strong> (Chromium fork / CEF)</td><td class="yes">Yes</td><td class="no">Very high</td><td class="no">Very high — build/sign/update pipeline, security surface</td><td class="no">Highest — browser-vendor commitment</td></tr>
+</tbody>
+</table>
+
+<div class="rec">
+  <h3 style="margin-top:0;color:var(--accent)">Recommendation — Option A: "be the browser backend"</h3>
+  <p style="margin:6px 0">Render natively serves the contract opencli's cookie adapters speak to the daemon, and backs every CDP target with <code>webContents.debugger</code> on Render's <em>own</em> tabs (Render's profile, where logins live). Cookie adapters then drive Render — the same property our <code>render get/text</code> adapter already proves, generalized to all sites. It needs <strong>no extension, no fork, no Chromium fork</strong>, and reuses the relay + <code>/json</code> discovery already built. After it lands, the two CDP planes converge into one and the relay's only remaining job is the e2b tunnel — its actual purpose.</p>
+</div>
+<svg viewBox="0 0 920 150" role="img" aria-label="Fixed routing: everything stays in Render">
+  <style>.bb{fill:var(--card2);stroke:var(--ok);stroke-width:2}.tt{fill:var(--ink);font:13px ui-monospace,Menlo,monospace}.ll{fill:var(--dim);font:11px sans-serif}</style>
+  <rect class="bb" x="10" y="50" width="150" height="46" rx="8"/><text class="tt" x="26" y="70">opencli</text><text class="ll" x="26" y="86">cookie adapter</text>
+  <rect class="bb" x="250" y="50" width="180" height="46" rx="8"/><text class="tt" x="266" y="70">daemon :19825</text><text class="ll" x="266" y="86">/ext backend</text>
+  <rect class="bb" x="520" y="50" width="180" height="46" rx="8"/><text class="tt" x="536" y="70">Render main</text><text class="ll" x="536" y="86">serves /ext + CDP</text>
+  <rect class="bb" x="770" y="50" width="140" height="46" rx="8"/><text class="tt" x="786" y="70" fill="var(--ok)">Render tab ✓</text><text class="ll" x="786" y="86">webContents.debugger</text>
+  <defs><marker id="g2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--ok)"/></marker></defs>
+  <path d="M160,73 L246,73" stroke="var(--ok)" stroke-width="2" fill="none" marker-end="url(#g2)"/>
+  <path d="M430,73 L516,73" stroke="var(--ok)" stroke-width="2" fill="none" marker-end="url(#g2)"/>
+  <path d="M700,73 L766,73" stroke="var(--ok)" stroke-width="2" fill="none" marker-end="url(#g2)"/>
+  <text class="ll" x="300" y="128" fill="var(--ok)">login + cookies never leave Render</text>
+</svg>
+
+<h2>5 · What collapses once A lands</h2>
+<div class="card kill">
+<ul>
+  <li><strong><code>opencli-auth.ts</code></strong> (the AUTH_REQUIRED login-detector added this session) — a dead end under A: it scrapes the agent's narrated command stream to retrofit a login card that the router already produces, and logging into a browser that isn't Render never helped anyway. <em>Delete it once A lands.</em></li>
+  <li><strong>Two-plane CDP split / <code>cdpEndpoint</code> fallback</strong> in <code>index.ts</code> — two endpoints for what becomes one backend. Collapses.</li>
+  <li><strong><code>apps.yaml</code> registration + embedded <code>render get/text</code></strong> — keep as the <em>proof</em> that the CDP route works; retire as a product mechanism (it mutates global <code>~/.opencli</code> from app startup — a footgun). Fold its insight into A.</li>
+  <li><strong><code>OPENCLI_PROFILE='default'</code> pin</strong> — papers over opencli's profile model; unnecessary once Render owns the session.</li>
+  <li><strong>Correction:</strong> the earlier "<code>apps.yaml</code> port 9477 vs 9333" alarm was wrong — prod is <code>9333</code> consistently; <code>9477</code> is only the <em>test harness</em> default in <code>nav-guard.e2e.mjs</code>. Align the test default; no prod bug.</li>
+</ul>
+</div>
+
+<h2>6 · Decisive spike &amp; top risks</h2>
+<p>Before committing to A, kill-or-confirm the one unknown with one cookie adapter:</p>
+<ol>
+  <li>Stand up a minimal <code>/ext</code> backend in Render main: accept the daemon's WebSocket, answer <code>hello</code>, and execute <code>cdp</code>/<code>navigate</code>/<code>cookies</code> actions against a Render <code>WebContentsView</code> via <code>webContents.debugger.sendCommand</code>.</li>
+  <li>Register Render as the daemon's active bridge profile; run <code>opencli dianping search</code> and confirm it drives a Render tab (and that login persists in Render's own partition).</li>
+</ol>
+<div class="grid cols-3">
+  <div class="card"><h3 style="margin-top:0">Risk 1 — protocol drift</h3><p class="dim" style="font-size:13.5px">The <code>/ext</code> contract is opencli-private &amp; minified. If it isn't cleanly separable from the extension, A's effort moves toward B. <em>Mitigate:</em> spike one adapter first; pin the opencli version.</p></div>
+  <div class="card"><h3 style="margin-top:0">Risk 2 — profile/session identity</h3><p class="dim" style="font-size:13.5px">Logins must persist in Render's own Chromium partition and be the session opencli drives. Today tabs use default partitions. <em>Mitigate:</em> design a persistent partition model alongside A.</p></div>
+  <div class="card"><h3 style="margin-top:0">Risk 3 — e2b tunnel</h3><p class="dim" style="font-size:13.5px">When the brain runs remotely, the cookie path must reach Render's backend over the relay tunnel — built but never exercised on this path. <em>Mitigate:</em> validate the remote case explicitly.</p></div>
+</div>
+
+<footer>
+  <p>Render architecture re-evaluation · synthesized from three independent investigations (cross-browser extension research · repo architecture review · opencli bridge feasibility) plus opencli source (<code>@jackwener/opencli</code> 1.8.x <code>runtime.js</code>) and this session's live <code>dianping</code> evidence.</p>
+  <p>Key sources: Electron extensions API (<a href="https://www.electronjs.org/docs/latest/api/extensions">electronjs.org/docs</a>) · Electron #49830 (chrome.debugger gap) · electron-chrome-extensions (Samuel Maddock) · Wavebox "Our Move to Chromium" · Vivaldi/Brave Chromium-fork maintenance writeups · CEF Chrome-runtime extension support · opencli <code>getBrowserFactory()</code>.</p>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCLI capability inside Render (Electron 33) — feasibility</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --bord:#2a3240; --fg:#e6edf3;
+    --mut:#9aa7b4; --acc:#58a6ff; --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fa; --panel:#fff; --panel2:#f0f3f7; --bord:#d0d7de; --fg:#1f2328; --mut:#57606a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:38px 0 12px;border-bottom:1px solid var(--bord);padding-bottom:6px}
+  h3{font-size:15px;margin:18px 0 6px}
+  .sub{color:var(--mut);margin:0 0 8px}
+  code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
+  pre{background:var(--panel2);border:1px solid var(--bord);border-radius:8px;padding:12px 14px;overflow:auto;font-family:var(--mono);font-size:12.5px}
+  .card{background:var(--panel);border:1px solid var(--bord);border-radius:10px;padding:16px 18px;margin:14px 0}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{border:1px solid var(--bord);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2)}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:.3px}
+  .t-good{background:rgba(63,185,80,.16);color:var(--good)}
+  .t-warn{background:rgba(210,153,34,.16);color:var(--warn)}
+  .t-bad{background:rgba(248,81,73,.16);color:var(--bad)}
+  .t-acc{background:rgba(88,166,255,.16);color:var(--acc)}
+  .pill{font-family:var(--mono);font-size:11px;border:1px solid var(--bord);border-radius:6px;padding:1px 6px;color:var(--mut)}
+  ol.steps{counter-reset:s;list-style:none;padding-left:0}
+  ol.steps>li{counter-increment:s;position:relative;padding:10px 0 10px 44px;border-bottom:1px solid var(--bord)}
+  ol.steps>li::before{content:counter(s);position:absolute;left:0;top:10px;width:28px;height:28px;background:var(--acc);color:#06101f;font-weight:800;border-radius:50%;display:grid;place-items:center}
+  .rank{font-size:34px;font-weight:800;color:var(--acc);line-height:1}
+  .grid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:760px){.grid{grid-template-columns:repeat(2,1fr)}}
+  .kill{border-left:4px solid var(--bad);padding-left:14px}
+  a{color:var(--acc)}
+  footer{margin-top:50px;color:var(--mut);font-size:12.5px;border-top:1px solid var(--bord);padding-top:16px}
+  .small{font-size:12.5px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Running OpenCLI's bridge capability inside Render (Electron 33)</h1>
+<p class="sub">Engineering feasibility — cheapest path to drive Render's own tabs with OpenCLI, login & cookies staying in Render. Skeptical eval of 4 routes + a 5th that the research surfaced.</p>
+
+<div class="card" style="border-color:var(--good)">
+<strong>TL;DR —</strong> Do <em>not</em> port the extension. OpenCLI already ships a supported "bring-your-own-browser" path: set <code>OPENCLI_CDP_ENDPOINT=http://127.0.0.1:&lt;port&gt;</code> and the CLI/daemon connects <em>directly</em> over CDP, bypassing both the Chrome extension and the daemon's <code>/ext</code> WebSocket. Render just needs to expose a CDP endpoint over loopback. That collapses the whole problem from "shim/fork/reimplement an MV3 service worker" to "launch Render's Chromium with a debugging port and point an env var at it."
+</div>
+
+<h2>The decisive finding (verify-this-first)</h2>
+<p>OpenCLI documents two env vars for exactly this use case:</p>
+<table>
+<tr><th>Var</th><th>Documented meaning</th></tr>
+<tr><td><code>OPENCLI_CDP_ENDPOINT</code></td><td>"Chrome DevTools Protocol endpoint for remote browser <strong>or Electron apps</strong>" — e.g. <code>http://127.0.0.1:9222</code></td></tr>
+<tr><td><code>OPENCLI_CDP_TARGET</code></td><td>Filter CDP targets by URL substring (e.g. <code>detail.1688.com</code>) — picks <em>which</em> tab/target to attach</td></tr>
+</table>
+<p>OpenCLI's docs explicitly treat Electron apps as first-class CDP targets ("Desktop app adapters (Electron, via CDP): Cursor / Codex / ChatGPT App / Discord / …"). The pattern is uniform: launch the Electron app with <code>--remote-debugging-port=&lt;port&gt;</code>, verify with <code>curl http://127.0.0.1:&lt;port&gt;/json/version</code>, then <code>export OPENCLI_CDP_ENDPOINT="http://127.0.0.1:&lt;port&gt;"</code>. Render is itself an Electron app, so it <em>is</em> one of these targets.</p>
+<p class="small">Sources: opencli README env table, <a href="https://github.com/jackwener/opencli/blob/main/docs/advanced/electron.md">docs/advanced/electron.md</a>, <a href="https://github.com/jackwener/opencli/blob/main/docs/guide/electron-app-cli.md">docs/guide/electron-app-cli.md</a>. When <code>OPENCLI_CDP_ENDPOINT</code> is set the CLI connects to the remote-debugging HTTP port directly "rather than using browser extensions or other intermediaries."</p>
+
+<h2>What the extension actually is (decoded from local install)</h2>
+<p>From <code>/Users/drej/.opencli/extension-v1.0.19</code> (manifest + minified <code>dist/background.js</code>, cross-checked against <code>extension/src/protocol.ts</code> on GitHub):</p>
+<ul>
+<li>MV3, <code>background.service_worker = dist/background.js</code>, <code>type: module</code>. Perms: <code>debugger, tabs, cookies, activeTab, alarms, storage, tabGroups, downloads</code>; hosts <code>&lt;all_urls&gt;</code>.</li>
+<li>Connects out to <code>ws://localhost:19825/ext</code> (pings <code>http://localhost:19825/ping</code>; reconnect backoff 2–5s). All hardcoded in the SW global.</li>
+<li>Core work = <code>chrome.debugger.sendCommand</code> (24 call sites), <code>attach/detach/getTargets/onEvent/onDetach</code> on leased tabs, plus <code>chrome.tabs.*</code>, <code>chrome.cookies.getAll</code>, <code>chrome.downloads.*</code>, <code>chrome.tabGroups.*</code>.</li>
+<li>Protocol is a request/response envelope: <code>Command{id, action, page?, code?, session?, surface, url?, op?...}</code> → <code>Result{id, ok, data?, error?, errorCode?...}</code>. <code>action ∈ {exec, navigate, tabs, cookies, screenshot, close-window, sessions, set-file-input, insert-text, bind, network-capture-start, network-capture-read, wait-download, cdp, frames}</code>.</li>
+</ul>
+<p><strong>The extension is just a CDP shuttle</strong>: daemon ↔(WS /ext)↔ extension ↔(chrome.debugger)↔ Chrome tabs. The <code>OPENCLI_CDP_ENDPOINT</code> path deletes the two middle hops and lets the daemon speak CDP straight to a target. So everything the extension does, the daemon can do itself given a CDP endpoint — which is why route 5 below is essentially free.</p>
+
+<h2>Route-by-route evaluation</h2>
+
+<div class="card">
+<h3>Route 1 — Load unmodified extension + shim <code>chrome.debugger</code> <span class="tag t-bad">NOT VIABLE</span></h3>
+<p><strong>Verdict: definitively no on Electron 33.</strong> Electron's extension layer is a partial, hardcoded reimplementation of the <code>chrome.*</code> surface in C++/JS — it is <em>not</em> Chrome. You cannot inject a JS <code>chrome.debugger</code> into a loaded extension's MV3 service-worker global:</p>
+<ul>
+<li>There is no "extension preload" hook for the background service worker. <code>session.preload</code>/<code>webContents</code> preloads apply to pages/renderers, not the extension SW's isolated global.</li>
+<li>Electron only injects the <code>chrome.*</code> APIs it has implemented; <code>chrome.debugger</code> isn't among them (0 occurrences in <code>electron.d.ts</code>, confirmed). Monkeypatching from outside the SW realm isn't reachable.</li>
+<li>Even Electron's own MV3 SW support is shaky in this era — known gaps/bugs (<code>chrome.scripting</code> not implemented; SW APIs only gradually filled in, e.g. <code>chrome.i18n</code> fixed in 33.3.1). Standing up a reliable third-party MV3 background SW is itself a risk, before you even reach the missing debugger API.</li>
+</ul>
+<p class="small">Sources: <a href="https://www.electronjs.org/docs/latest/api/extensions">Electron extensions docs</a>, <a href="https://github.com/electron/electron/issues/37876">#37876 chrome.scripting not implemented in MV3</a>, <a href="https://github.com/electron/electron/issues/34178">#34178 MV3 SW supported APIs don't function</a>.</p>
+</div>
+
+<div class="card">
+<h3>Route 2 — Fork the extension; replace <code>chrome.debugger.*</code> with an RPC to Render main <span class="tag t-warn">WORKS, BUT WASTEFUL</span></h3>
+<p>Mechanically possible: source is open (<code>extension/src/{background,cdp,protocol,identity}.ts</code>, Vite build). You'd swap <code>cdp.ts</code>'s <code>chrome.debugger.sendCommand</code> for a call that reaches Render main, which executes via <code>webContents.debugger.sendCommand</code>. Channel from an MV3 SW → main: a <code>fetch()</code>/WebSocket to a localhost server hosted in main is the only robust option (the SW has no Node and no IPC; content-script+preload bouncing is fragile and can't run on the SW's own behalf).</p>
+<p><strong>Why not:</strong> you still inherit Electron 33's flaky MV3 SW lifecycle, still load a third-party extension, still maintain a fork against upstream — to rebuild a CDP pipe that <code>OPENCLI_CDP_ENDPOINT</code> already gives you for free. Effort <span class="pill">M–L</span>, ongoing maintenance, no upside over route 5. Keeps everything in Render: yes. Recommend: no.</p>
+</div>
+
+<div class="card">
+<h3>Route 3 — Reimplement the daemon <code>/ext</code> backend natively in Render main <span class="tag t-warn">VIABLE, UNNECESSARY</span></h3>
+<p>The <code>/ext</code> protocol is highly decodable — the TS types are public in <code>protocol.ts</code> (Command/Result/Action above), and <code>DAEMON_WS_URL</code> etc. are literally the first lines of the shipped <code>background.js</code>. So you <em>could</em> have Render main open <code>ws://localhost:19825/ext</code>, send <code>hello</code>, accept leases, and service <code>cdp</code>/<code>navigate</code>/<code>cookies</code>/<code>screenshot</code> via <code>webContents.debugger</code>.</p>
+<p><strong>But:</strong> <code>/ext</code> is a private, versioned daemon↔extension contract (no public spec; "No WebSocket protocol documentation" in the docs) — it will drift between releases and you'd be chasing it. The <code>OPENCLI_CDP_ENDPOINT</code> path is the <em>supported</em> public seam that exists precisely so you don't reverse <code>/ext</code>. Pick route 5 instead. Effort <span class="pill">M</span>; risk: silent protocol drift on every opencli bump.</p>
+</div>
+
+<div class="card">
+<h3>Route 4 — <code>electron-chrome-extensions</code> library <span class="tag t-bad">DOESN'T HELP</span></h3>
+<p>It broadens Electron's <code>chrome.*</code> coverage (tabs, windows, contextMenus, etc.) but is DevTools/UX-focused and does <strong>not</strong> implement <code>chrome.debugger</code> for extensions. You'd be back to contributing a full <code>chrome.debugger</code> implementation upstream (large C++/JS surface, security-sensitive) — far more work than route 5, and still in service of route 1/2 which we've rejected. Not a shortcut.</p>
+<p class="small">Source: <a href="https://www.npmjs.com/package/electron-chrome-extensions">electron-chrome-extensions (npm)</a>, <a href="https://www.electronjs.org/docs/latest/api/extensions">Electron extensions docs</a>.</p>
+</div>
+
+<div class="card" style="border-color:var(--good)">
+<h3>Route 5 (surfaced by research) — BYO CDP endpoint: <code>OPENCLI_CDP_ENDPOINT</code> → Render's Chromium <span class="tag t-good">RECOMMENDED</span></h3>
+<p>Render is Electron/Chromium, so it can expose the very CDP surface opencli already knows how to drive. Two sub-variants:</p>
+<table>
+<tr><th>Variant</th><th>How</th><th>Trade-off</th></tr>
+<tr><td><strong>5a — remote-debugging-port</strong></td><td>Launch Render's Chromium with <code>--remote-debugging-port=&lt;port&gt;</code> bound to loopback; point <code>OPENCLI_CDP_ENDPOINT</code> at <code>http://127.0.0.1:&lt;port&gt;</code>. opencli hits <code>/json/version</code>, opens the target's WS, drives it.</td><td>Lowest effort <span class="pill">S</span>. Standard Chromium <code>/json</code> discovery — exactly what opencli expects. Caveat: the port is an open CDP surface on loopback (any local process can attach) → must bind 127.0.0.1, ideally ephemeral/random port, and treat it as a local-trust boundary. Targets are renderer tabs only; main process isn't exposed unless you also pass <code>--inspect</code> (don't).</td></tr>
+<tr><td><strong>5b — webContents.debugger + tiny CDP proxy</strong></td><td>No global debugging port. Render main owns each tab via <code>webContents.debugger.attach('1.3')</code> and exposes a minimal <code>/json/version</code>+per-target WS proxy on loopback that opencli connects to, forwarding frames to <code>webContents.debugger.sendCommand</code>.</td><td>Effort <span class="pill">M</span>. Keeps the in-process model (no app-wide CDP port, finer control over which tabs are leasable), but you reimplement the small <code>/json</code> discovery shim opencli needs. Choose only if 5a's open-port posture is unacceptable.</td></tr>
+</table>
+<p><strong>Login/cookies stay in Render in both variants</strong> — opencli only attaches CDP to Render's existing, logged-in renderer sessions; it never gets its own browser profile. Cookie scraping happens via CDP (<code>Network.getCookies</code>/<code>Storage</code>) against Render's session, exactly as intended.</p>
+</div>
+
+<h2>Ranked recommendation</h2>
+<table>
+<tr><th>#</th><th>Route</th><th>Works on E33?</th><th>Effort</th><th>All-in-Render?</th><th>Note</th></tr>
+<tr><td>1</td><td><strong>5a</strong> remote-debugging-port + <code>OPENCLI_CDP_ENDPOINT</code></td><td><span class="tag t-good">Yes</span></td><td>S</td><td>Yes</td><td>Supported public path; zero extension code</td></tr>
+<tr><td>2</td><td><strong>5b</strong> webContents.debugger + loopback CDP proxy</td><td><span class="tag t-good">Yes</span></td><td>M</td><td>Yes</td><td>If you must avoid an app-wide CDP port</td></tr>
+<tr><td>3</td><td>3 — reimplement <code>/ext</code> in main</td><td>Yes</td><td>M</td><td>Yes</td><td>Private protocol, drifts; only if BYO-CDP path were removed</td></tr>
+<tr><td>4</td><td>2 — fork extension + RPC to main</td><td>Risky</td><td>M–L</td><td>Yes</td><td>Inherits flaky MV3 SW; no upside</td></tr>
+<tr><td>5</td><td>1 — shim chrome.debugger into loaded ext</td><td><span class="tag t-bad">No</span></td><td>—</td><td>—</td><td>Not possible on Electron 33</td></tr>
+<tr><td>6</td><td>4 — electron-chrome-extensions</td><td><span class="tag t-bad">No</span></td><td>—</td><td>—</td><td>No chrome.debugger; not a shortcut</td></tr>
+</table>
+
+<h2>Spike plan for the top pick (5a)</h2>
+<ol class="steps">
+<li><strong>Kill-or-confirm the single biggest risk first (below)</strong> — does opencli actually attach and drive a target it discovers through <code>OPENCLI_CDP_ENDPOINT</code> pointed at an Electron/Chromium debugging port, with login state intact? Validate against Render before building anything.</li>
+<li>Launch a throwaway Electron 33 build (or Render itself) with <code>--remote-debugging-port=0</code> bound to loopback; read the chosen port; <code>curl http://127.0.0.1:&lt;port&gt;/json/version</code> and <code>/json/list</code> to confirm targets enumerate.</li>
+<li><code>export OPENCLI_CDP_ENDPOINT="http://127.0.0.1:&lt;port&gt;"</code> (+ <code>OPENCLI_CDP_TARGET=&lt;url-substring&gt;</code> to pin the tab). Run a trivial opencli browser command (navigate + screenshot) and confirm it acts on the Render tab.</li>
+<li>Verify a logged-in flow: sign in inside Render, then run an opencli command that reads cookies / hits an authed page — confirm session is reused and nothing leaks to a separate profile.</li>
+<li>Lock down the surface: bind 127.0.0.1 only, ephemeral port, don't pass <code>--inspect</code>, gate enabling the port behind an explicit Render setting; document it as a local-trust boundary. Strip the flag from any shipped/production build path.</li>
+<li>Wire port discovery into Render's launch and export <code>OPENCLI_CDP_ENDPOINT</code> for the opencli process Render spawns; add a health check (<code>/json/version</code> reachable) before issuing commands.</li>
+</ol>
+
+<div class="card kill">
+<h3>Biggest risk to kill first</h3>
+<p><strong>Target discovery & attach semantics across the CDP-endpoint seam.</strong> The whole plan rests on opencli's <code>OPENCLI_CDP_ENDPOINT</code> path doing real <code>/json</code> target discovery + per-target WS attach against an arbitrary Chromium debugging port — not assuming a flow that only the extension provided (tab leasing, <code>tabGroups</code>, <code>downloads</code>, <code>bind</code>). If opencli's CDP-endpoint mode supports only a subset of actions (e.g. <code>exec/navigate/screenshot/cookies</code> but not <code>bind</code>/downloads/network-capture), some adapters may degrade. <strong>Confirm before building:</strong> point <code>OPENCLI_CDP_ENDPOINT</code> at a plain Chromium started with <code>--remote-debugging-port</code> and exercise the exact opencli commands Render needs end-to-end. If it works there, Render (same Chromium) will work; if an action is unsupported in CDP-endpoint mode, that's your gap to close (and only then does route 3/5b come back into scope).</p>
+</div>
+
+<h2>Open items worth a follow-up read</h2>
+<ul>
+<li>Read <code>extension/src/cdp.ts</code> + <code>background.ts</code> on GitHub to enumerate which <code>action</code>s depend on extension-only APIs (<code>tabGroups</code>, <code>downloads</code>) vs pure CDP — tells you exactly what, if anything, the CDP-endpoint mode can't do.</li>
+<li>Confirm in opencli source which actions the <code>OPENCLI_CDP_ENDPOINT</code> code path implements (vs the <code>/ext</code> path) — this is the precise scope of route-5a coverage.</li>
+</ul>
+
+<footer>
+Feasibility analysis for Render (Electron 33) + OpenCLI v1.0.19. Local extension: <code>/Users/drej/.opencli/extension-v1.0.19</code>. Render repo: <code>/Users/drej/workspace/render</code>.<br>
+Sources: <a href="https://github.com/jackwener/opencli">github.com/jackwener/opencli</a> ·
+<a href="https://github.com/jackwener/opencli/blob/main/docs/advanced/electron.md">docs/advanced/electron.md</a> ·
+<a href="https://github.com/jackwener/opencli/blob/main/docs/guide/electron-app-cli.md">docs/guide/electron-app-cli.md</a> ·
+<a href="https://www.electronjs.org/docs/latest/api/extensions">Electron extensions</a> ·
+<a href="https://github.com/electron/electron/issues/37876">electron#37876</a> ·
+<a href="https://github.com/electron/electron/issues/34178">electron#34178</a> ·
+<a href="https://www.npmjs.com/package/electron-chrome-extensions">electron-chrome-extensions</a> ·
+<a href="https://www.electronjs.org/docs/api/debugger">Electron webContents.debugger</a>
+</footer>
+</div>
+</body>
+</html>
