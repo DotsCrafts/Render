@@ -10,6 +10,7 @@
     "start": "electron-vite preview",
     "proof": "tsx src/main/journey-proof.ts",
     "test:nav": "electron-vite build && node test/nav-guard.e2e.mjs",
+    "test:cdp": "electron-vite build && node test/cdp-opencli.e2e.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
