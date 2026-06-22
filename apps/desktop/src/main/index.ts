@@ -98,7 +98,7 @@ function wire(win: BrowserWindow): void {
     now: () => Date.now(),
   });
 
-  const broker = registerIpc({ chrome: win.webContents, tabs, agent, humanHand });
+  const broker = registerIpc({ chrome: win.webContents, tabs, agent, humanHand, codex: codexProvider });
 
   // Serve opencli's /ext browser backend from Render's OWN Chromium (default ON;
   // RENDER_OPENCLI_BRIDGE=0 disables). Cookie/browser adapters then run inside

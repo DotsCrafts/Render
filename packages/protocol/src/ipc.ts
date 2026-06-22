@@ -48,6 +48,28 @@ export interface TabState {
   group?: TabGroupInfo;
 }
 
+// ── Codex provider / auth (Phase A) ──────────────────────────────────────────
+
+export type CodexWireApi = 'chat' | 'responses';
+export type CodexAuthMode = 'oauth' | 'apikey';
+
+export interface CodexProviderConfig {
+  /** model_providers.<name> key + model_provider value */
+  name: string;
+  /** provider base URL; empty = codex's built-in OpenAI default */
+  baseUrl?: string;
+  wireApi: CodexWireApi;
+  authMode: CodexAuthMode;
+}
+
+export interface CodexProviderStatus {
+  provider: CodexProviderConfig;
+  authed: boolean;
+  authKind: CodexAuthMode | null;
+  /** masked display hint, e.g. "sk-5e49…7ad9f" or "ChatGPT" */
+  hint: string;
+}
+
 export const IPC = {
   // renderer → main (invoke)
   submitPrompt: 'render:submitPrompt', // (text) → turnId
@@ -60,6 +82,13 @@ export const IPC = {
   tabActivate: 'render:tabActivate',
   setPanelWidth: 'render:setPanelWidth', // (width:number) — resize the agent panel
   getState: 'render:getState',
+
+  // codex provider/auth (Phase A) — all return CodexProviderStatus
+  codexStatus: 'render:codexStatus',
+  codexSetProvider: 'render:codexSetProvider', // (CodexProviderConfig)
+  codexLoginApiKey: 'render:codexLoginApiKey', // (apiKey)
+  codexLoginOAuth: 'render:codexLoginOAuth', // opens auth URL in a Render tab
+  codexLogout: 'render:codexLogout',
 
   // main → renderer (emit)
   agentEvent: 'render:agentEvent', // AgentEvent
@@ -77,6 +106,11 @@ export interface RenderApi {
   tabActivate(tabId: string): Promise<void>;
   setPanelWidth(width: number): Promise<void>;
   getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[] }>;
+  codexStatus(): Promise<CodexProviderStatus>;
+  codexSetProvider(p: CodexProviderConfig): Promise<CodexProviderStatus>;
+  codexLoginApiKey(apiKey: string): Promise<CodexProviderStatus>;
+  codexLoginOAuth(): Promise<CodexProviderStatus>;
+  codexLogout(): Promise<CodexProviderStatus>;
   onAgentEvent(cb: (e: AgentEvent) => void): () => void;
   onTabsChanged(cb: (tabs: TabState[]) => void): () => void;
 }

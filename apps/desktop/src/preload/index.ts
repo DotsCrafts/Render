@@ -5,7 +5,14 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import { IPC, type AgentEvent, type RenderApi, type TabState, type UxResult } from '@render/protocol';
+import {
+  IPC,
+  type AgentEvent,
+  type RenderApi,
+  type TabState,
+  type UxResult,
+  type CodexProviderConfig,
+} from '@render/protocol';
 import { CHROME_IPC, type RenderChromeApi } from '../shared/chrome-channels.js';
 
 const api: RenderApi = {
@@ -19,6 +26,12 @@ const api: RenderApi = {
   tabActivate: (tabId) => ipcRenderer.invoke(IPC.tabActivate, tabId),
   setPanelWidth: (width) => ipcRenderer.invoke(IPC.setPanelWidth, width),
   getState: () => ipcRenderer.invoke(IPC.getState),
+
+  codexStatus: () => ipcRenderer.invoke(IPC.codexStatus),
+  codexSetProvider: (p: CodexProviderConfig) => ipcRenderer.invoke(IPC.codexSetProvider, p),
+  codexLoginApiKey: (apiKey: string) => ipcRenderer.invoke(IPC.codexLoginApiKey, apiKey),
+  codexLoginOAuth: () => ipcRenderer.invoke(IPC.codexLoginOAuth),
+  codexLogout: () => ipcRenderer.invoke(IPC.codexLogout),
 
   onAgentEvent: (cb: (e: AgentEvent) => void) => {
     const listener = (_e: unknown, event: AgentEvent): void => cb(event);

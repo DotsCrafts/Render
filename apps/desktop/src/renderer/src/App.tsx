@@ -1,9 +1,10 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { useRenderState } from './useRenderState.js';
 import { TabStrip } from './components/TabStrip.js';
 import { Omnibox } from './components/Omnibox.js';
 import { FloatingInput } from './components/FloatingInput.js';
 import { AgentPanel } from './components/AgentPanel.js';
+import { CodexSettings } from './components/CodexSettings.js';
 
 /**
  * The browser chrome (untrusted display). The real web pages are native
@@ -12,6 +13,7 @@ import { AgentPanel } from './components/AgentPanel.js';
  */
 export function App(): ReactElement {
   const { tabs, activeTab, events, busy, actions } = useRenderState();
+  const [showSettings, setShowSettings] = useState(false);
 
   return (
     <div className="app">
@@ -30,7 +32,17 @@ export function App(): ReactElement {
           onForward={actions.forward}
           onReload={actions.reload}
         />
+        <button
+          className="settings-btn"
+          onClick={() => setShowSettings(true)}
+          aria-label="codex settings"
+          title="Codex 设置"
+        >
+          ⚙
+        </button>
       </header>
+
+      {showSettings ? <CodexSettings onClose={() => setShowSettings(false)} /> : null}
 
       <main className="stage">
         <div className="hint">{tabs.length === 0 ? 'opening tab…' : ''}</div>

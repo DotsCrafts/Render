@@ -8,11 +8,18 @@
  */
 
 import { ipcMain, type WebContents } from 'electron';
-import { IPC, type AgentEvent, type TabState, type UxResult } from '@render/protocol';
+import {
+  IPC,
+  type AgentEvent,
+  type TabState,
+  type UxResult,
+  type CodexProviderConfig,
+} from '@render/protocol';
 import type { HumanHandHandle } from '@render/cdp-human-hand';
 import { CHROME_IPC } from '../shared/chrome-channels.js';
 import type { TabManager } from './tabs.js';
 import type { AgentRuntime } from './agent-runtime.js';
+import type { CodexProvider } from './codex-provider.js';
 
 export interface IpcDeps {
   /** the chrome renderer that receives emit() events */
@@ -20,6 +27,8 @@ export interface IpcDeps {
   tabs: TabManager;
   agent: AgentRuntime;
   humanHand: HumanHandHandle;
+  /** codex provider/auth manager (Phase A) */
+  codex: CodexProvider;
 }
 
 export interface IpcBroker {
@@ -31,7 +40,7 @@ export interface IpcBroker {
 const MAX_EVENT_LOG = 500;
 
 export function registerIpc(deps: IpcDeps): IpcBroker {
-  const { chrome, tabs, agent, humanHand } = deps;
+  const { chrome, tabs, agent, humanHand, codex } = deps;
 
   // Durable event stream: the renderer holds events in React state, which is
   // wiped on any reload (HMR, crash, accidental navigation). Buffer them here in
@@ -61,6 +70,27 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.tabActivate]: (_e, tabId: string) => tabs.activate(tabId),
     [IPC.setPanelWidth]: (_e, width: number) => tabs.setPanelWidth(width),
     [IPC.getState]: () => ({ tabs: tabs.snapshot(), events: eventLog.slice() }),
+
+    // codex provider/auth — each mutation returns the fresh status so the
+    // renderer re-renders. OAuth opens the auth URL in a Render tab (never the
+    // system browser), so Plane-1 login stays inside Render.
+    [IPC.codexStatus]: () => codex.getStatus(),
+    [IPC.codexSetProvider]: (_e, p: CodexProviderConfig) => {
+      codex.setProvider(p);
+      return codex.getStatus();
+    },
+    [IPC.codexLoginApiKey]: async (_e, apiKey: string) => {
+      await codex.loginWithApiKey(apiKey);
+      return codex.getStatus();
+    },
+    [IPC.codexLoginOAuth]: async () => {
+      await codex.loginWithOAuth((url: string) => tabs.openUrl(url));
+      return codex.getStatus();
+    },
+    [IPC.codexLogout]: () => {
+      codex.logout();
+      return codex.getStatus();
+    },
 
     [CHROME_IPC.back]: (_e, tabId: string) => tabs.goBack(tabId),
     [CHROME_IPC.forward]: (_e, tabId: string) => tabs.goForward(tabId),

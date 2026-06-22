@@ -25,27 +25,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stripHookSections } from '@render/agent-bridge';
+import type {
+  CodexProviderConfig as ProviderConfig,
+  CodexProviderStatus as ProviderStatus,
+} from '@render/protocol';
 
-export type WireApi = 'chat' | 'responses';
-export type AuthMode = 'oauth' | 'apikey';
-
-export interface ProviderConfig {
-  /** model_providers.<name> key + model_provider value. */
-  name: string;
-  /** Provider base URL. Omit/empty for codex's built-in OpenAI default. */
-  baseUrl?: string;
-  wireApi: WireApi;
-  authMode: AuthMode;
-}
-
-export interface ProviderStatus {
-  provider: ProviderConfig;
-  authed: boolean;
-  /** 'oauth' | 'apikey' | null — how we're currently authed (from the stored blob). */
-  authKind: AuthMode | null;
-  /** masked hint for display, e.g. "sk-5e49…7ad9f" or "ChatGPT". */
-  hint: string;
-}
+export type { ProviderConfig, ProviderStatus };
 
 const DEFAULT_PROVIDER: ProviderConfig = {
   name: 'OpenAI',
