@@ -1,11 +1,15 @@
 /**
  * Flag-gated wire-in for @render/opencli-bridge (Milestone 1, default OFF).
  *
- * When `RENDER_OPENCLI_BRIDGE=1`, Render registers itself as the opencli daemon's
- * active browser profile (contextId 3k59e8nw) and serves `/ext` browser commands
- * by driving its OWN Chromium — so opencli's cookie/browser adapters run inside
- * Render, never system Chrome. Inert by default: with the flag unset this module
- * does nothing and nothing is constructed.
+ * When `RENDER_OPENCLI_BRIDGE=1`, Render registers itself as its OWN, distinct
+ * opencli browser profile (contextId `render`, override via `RENDER_OPENCLI_PROFILE`)
+ * and serves `/ext` browser commands by driving its OWN Chromium — so opencli's
+ * cookie/browser adapters run inside Render, never system Chrome. Crucially it does
+ * NOT register as the system-Chrome extension's contextId (`3k59e8nw`), so system
+ * Chrome stays connected on its own profile, untouched: opencli routes to Render
+ * only when a caller targets `--profile render` / `OPENCLI_PROFILE=render`, and the
+ * unqualified default keeps routing to system Chrome. Inert by default: with the
+ * flag unset this module does nothing and nothing is constructed.
  *
  * Milestone 1 is single-lease: the bridge owns ONE bridge-only `WebContentsView`,
  * added off-screen (never shown, never inset over the user's tabs), matching the
@@ -20,12 +24,21 @@ import { WebContentsView, type BaseWindow } from 'electron';
 import {
   createOpencliBridge,
   createWebContentsLeaseProvider,
+  RENDER_CONTEXT_ID,
   type BridgeHandle,
 } from '@render/opencli-bridge';
 
 export interface OpencliBridgeWire {
+  /** The opencli profile name Render registered as — point `OPENCLI_PROFILE` here. */
+  readonly profile: string;
   /** Tear down the bridge + its owned view. Idempotent. */
   dispose(): Promise<void>;
+}
+
+/** Resolve Render's bridge profile name (env override → `"render"`). */
+export function renderBridgeProfile(): string {
+  const override = process.env.RENDER_OPENCLI_PROFILE?.trim();
+  return override && override.length > 0 ? override : RENDER_CONTEXT_ID;
 }
 
 export interface OpencliBridgeWireDeps {
@@ -69,8 +82,11 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
     },
   });
 
+  const profile = renderBridgeProfile();
   const bridge: BridgeHandle = createOpencliBridge({
     provider,
+    // Distinct, named profile — never the shared system-Chrome contextId.
+    contextId: profile,
     onError: (err) => console.warn('[opencli-bridge]', err.message),
   });
 
@@ -79,6 +95,7 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
   });
 
   return {
+    profile,
     dispose: async () => {
       await bridge.stop();
     },

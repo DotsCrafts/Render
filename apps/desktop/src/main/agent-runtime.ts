@@ -215,7 +215,18 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         // DISCONNECTED context, which makes browser/search commands fail with
         // "profile not connected". Pin a connected profile so the agent's opencli
         // browser commands work without it having to recover each time.
-        env.OPENCLI_PROFILE = process.env.OPENCLI_PROFILE ?? 'default';
+        //
+        // When the opencli /ext bridge is active (RENDER_OPENCLI_BRIDGE=1), Render
+        // is itself connected as a distinct, named profile (default `render`), so
+        // we target THAT — the agent's opencli browser/cookie commands are then
+        // served by Render's OWN Chromium via the bridge, while the unqualified
+        // default profile keeps routing to the user's system Chrome (untouched).
+        // An explicit OPENCLI_PROFILE always wins.
+        env.OPENCLI_PROFILE =
+          process.env.OPENCLI_PROFILE ??
+          (process.env.RENDER_OPENCLI_BRIDGE === '1'
+            ? (process.env.RENDER_OPENCLI_PROFILE?.trim() || 'render')
+            : 'default');
         // Wire the human-hand relay so the agent's opencli browser-adapter calls
         // drive the user's REAL logged-in Chromium (Plane-2 stays in the browser).
         if (deps.cdpEndpoint) {

@@ -16,7 +16,7 @@
 
 import { WebSocket } from 'ws';
 import { dispatch } from './actions.js';
-import { DEFAULT_CONTEXT_ID, errorToResult, helloFrame } from './protocol.js';
+import { RENDER_CONTEXT_ID, errorToResult, helloFrame } from './protocol.js';
 import type {
   CommandFrame,
   FrameRecord,
@@ -27,13 +27,21 @@ import type {
 
 const DEFAULT_DAEMON_URL = 'ws://127.0.0.1:19825/ext';
 const RECONNECT_DELAY_MS = 1_000;
+/** Max time stop() waits for the daemon to ACK our close (unregister our profile). */
+const CLOSE_GRACE_MS = 2_000;
 
 export interface BridgeDeps {
   /** Owns + leases the CDP targets the bridge drives. */
   provider: TargetProvider;
   /** Daemon `/ext` URL (default ws://127.0.0.1:19825/ext). */
   daemonUrl?: string;
-  /** The contextId to register as (default 3k59e8nw — the daemon's defaultContextId). */
+  /**
+   * The contextId to register as. Defaults to `"render"` — Render's OWN, distinct
+   * profile. It MUST differ from the system-Chrome extension's contextId
+   * (`3k59e8nw`), otherwise the daemon evicts whichever connected first and we are
+   * back to the M1 quit-Chrome behaviour. opencli targets us with
+   * `--profile render` / `OPENCLI_PROFILE=render`.
+   */
   contextId?: string;
   /** Auto re-connect + re-hello when the daemon drops us (default true). */
   autoReconnect?: boolean;
@@ -54,7 +62,7 @@ export interface BridgeHandle {
 
 export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
   const daemonUrl = deps.daemonUrl ?? DEFAULT_DAEMON_URL;
-  const contextId = deps.contextId ?? DEFAULT_CONTEXT_ID;
+  const contextId = deps.contextId ?? RENDER_CONTEXT_ID;
   const autoReconnect = deps.autoReconnect ?? true;
 
   let ws: WebSocket | null = null;
@@ -132,19 +140,49 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
     await open();
   };
 
+  // Resolve once the socket is fully CLOSED so the daemon has run its `ws.on('close')`
+  // handler — that is what `unregisterExtensionConnection` runs to remove OUR profile
+  // from `extensionProfiles`. Without awaiting this, a fast process exit can strand the
+  // profile and leave the daemon showing a ghost (`none selected`). We mark `stopped`
+  // first so the close handler does NOT schedule a reconnect (which would re-register us).
+  const closeSocket = (socket: WebSocket): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (socket.readyState === WebSocket.CLOSED) {
+        resolve();
+        return;
+      }
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        // Daemon never ACKed the close in time — force the underlying socket shut so
+        // the FIN still reaches the daemon, then give up waiting.
+        try {
+          socket.terminate();
+        } catch {
+          /* already gone */
+        }
+        done();
+      }, CLOSE_GRACE_MS);
+      socket.once('close', done);
+      try {
+        socket.close();
+      } catch {
+        done();
+      }
+    });
+
   const stop = async (): Promise<void> => {
     stopped = true;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    if (ws) {
-      try {
-        ws.close();
-      } catch {
-        /* already closing */
-      }
-      ws = null;
+    const socket = ws;
+    ws = null;
+    if (socket) {
+      await closeSocket(socket);
     }
     await deps.provider.dispose();
   };

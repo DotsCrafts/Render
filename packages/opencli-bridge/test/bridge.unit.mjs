@@ -12,9 +12,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { WebSocketServer } from 'ws';
 import { createSingleLeaseProvider } from '../src/lease.ts';
 import { dispatch } from '../src/actions.ts';
-import { ok, fail } from '../src/protocol.ts';
+import { ok, fail, RENDER_CONTEXT_ID, SYSTEM_CHROME_CONTEXT_ID } from '../src/protocol.ts';
+import { createOpencliBridge } from '../src/bridge.ts';
 import { StalePageError } from '../src/types.ts';
 
 /** A fake CDP target: records sends, returns scripted Runtime.evaluate values. */
@@ -121,4 +123,112 @@ test('protocol envelopes are immutable shapes', () => {
     error: 'boom',
     errorCode: 'x',
   });
+});
+
+// ── M1.5: distinct profile identity + clean disconnect ───────────────────────
+
+test('protocol: Render registers as its OWN contextId, NOT the system-Chrome one', () => {
+  // The whole M1.5 fix: our default contextId must differ from system Chrome's,
+  // so the daemon does not evict Chrome's socket (collision == the M1 quit-Chrome bug).
+  assert.equal(RENDER_CONTEXT_ID, 'render');
+  assert.notEqual(RENDER_CONTEXT_ID, SYSTEM_CHROME_CONTEXT_ID);
+});
+
+/**
+ * A minimal stand-in for the opencli daemon's `/ext` WS server that mirrors the
+ * two behaviours we depend on (verified against daemon.js):
+ *   • on `hello`, register the socket under `contextId`, evicting any PRIOR socket
+ *     on the SAME contextId (registerExtensionConnection),
+ *   • on socket close, unregister that contextId (unregisterExtensionConnection).
+ * `profiles()` returns the live set the CLI would resolve against.
+ */
+function fakeDaemon() {
+  const byContext = new Map(); // contextId -> ws
+  const wss = new WebSocketServer({ port: 0 });
+  wss.on('connection', (ws) => {
+    let myContextId = null;
+    ws.on('message', (raw) => {
+      let msg;
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (msg.type === 'hello') {
+        const cid = (typeof msg.contextId === 'string' && msg.contextId.trim()) || 'default';
+        const prior = byContext.get(cid);
+        if (prior && prior !== ws) prior.close(); // evict prior socket on same id
+        myContextId = cid;
+        byContext.set(cid, ws);
+      }
+    });
+    ws.on('close', () => {
+      if (myContextId && byContext.get(myContextId) === ws) byContext.delete(myContextId);
+    });
+  });
+  return {
+    url: () => `ws://127.0.0.1:${wss.address().port}/ext`,
+    profiles: () => [...byContext.keys()].sort(),
+    close: () => new Promise((r) => wss.close(r)),
+  };
+}
+
+const settle = (ms = 80) => new Promise((r) => setTimeout(r, ms));
+const noopProvider = () => ({ acquire: async () => fakeTarget('t'), current: () => null, dispose: async () => {} });
+
+test('bridge connects as a DISTINCT default profile (render), coexisting with system Chrome', async () => {
+  const daemon = fakeDaemon();
+  // simulate system Chrome's extension already connected on its own contextId
+  const { WebSocket } = await import('ws');
+  const chrome = new WebSocket(daemon.url());
+  await new Promise((r) => chrome.on('open', r));
+  chrome.send(JSON.stringify({ type: 'hello', contextId: SYSTEM_CHROME_CONTEXT_ID }));
+  await settle();
+  assert.deepEqual(daemon.profiles(), [SYSTEM_CHROME_CONTEXT_ID]);
+
+  // bring up the bridge with its DEFAULT contextId — must NOT evict Chrome
+  const bridge = createOpencliBridge({ provider: noopProvider(), daemonUrl: daemon.url(), autoReconnect: false });
+  await bridge.start();
+  await settle();
+  assert.deepEqual(daemon.profiles(), [SYSTEM_CHROME_CONTEXT_ID, RENDER_CONTEXT_ID].sort());
+  assert.ok(chrome.readyState === WebSocket.OPEN, 'system Chrome socket must stay open (never evicted)');
+
+  await bridge.stop();
+  chrome.close();
+  await daemon.close();
+});
+
+test('stop() leaves the daemon CLEAN — our profile is unregistered, no ghost', async () => {
+  const daemon = fakeDaemon();
+  const bridge = createOpencliBridge({
+    provider: noopProvider(),
+    daemonUrl: daemon.url(),
+    contextId: 'render',
+    autoReconnect: false,
+  });
+  await bridge.start();
+  await settle();
+  assert.deepEqual(daemon.profiles(), ['render']);
+
+  await bridge.stop(); // must AWAIT the socket close so the daemon unregisters us
+  await settle();
+  assert.equal(bridge.connected, false);
+  assert.deepEqual(daemon.profiles(), [], 'no ghost profile may remain after stop()');
+
+  await daemon.close();
+});
+
+test('a configured contextId is what gets registered (routing target is controllable)', async () => {
+  const daemon = fakeDaemon();
+  const bridge = createOpencliBridge({
+    provider: noopProvider(),
+    daemonUrl: daemon.url(),
+    contextId: 'render-test-7',
+    autoReconnect: false,
+  });
+  await bridge.start();
+  await settle();
+  assert.deepEqual(daemon.profiles(), ['render-test-7']);
+  await bridge.stop();
+  await daemon.close();
 });

@@ -9,8 +9,32 @@
 
 import type { HelloFrame, ResultFrame, StalePageError } from './types.js';
 
-/** opencli daemon contextId we register as (defaultContextId in browser-profiles.json). */
-export const DEFAULT_CONTEXT_ID = '3k59e8nw';
+/**
+ * Render's OWN, distinct profile contextId.
+ *
+ * M1 registered as `3k59e8nw` — the SAME contextId the user's system-Chrome
+ * extension uses — so the two collided and the daemon evicted Chrome's socket
+ * (`registerExtensionConnection` closes the previous ws on the same contextId).
+ * That collision is exactly why the M1 proof had to QUIT system Chrome to win
+ * the active profile.
+ *
+ * M1.5 fixes this: Render connects as a separate, named contextId so it shows
+ * up as its own profile alongside system Chrome. opencli routes to us via
+ * `resolveProfileContextId` (the `--profile <name>` flag → `OPENCLI_PROFILE`
+ * env → `defaultContextId`), so targeting `OPENCLI_PROFILE=render` reaches this
+ * profile while the default keeps routing to the system-Chrome `3k59e8nw`.
+ */
+export const RENDER_CONTEXT_ID = 'render';
+
+/**
+ * The system-Chrome extension's contextId on this machine (the daemon's
+ * `defaultContextId`). Render must NOT register as this — kept only as a named
+ * reference so the collision we eliminated is documented, not re-introduced.
+ */
+export const SYSTEM_CHROME_CONTEXT_ID = '3k59e8nw';
+
+/** @deprecated Use RENDER_CONTEXT_ID. Retained for back-compat of the export surface. */
+export const DEFAULT_CONTEXT_ID = RENDER_CONTEXT_ID;
 
 /**
  * `hello` fields are advisory — the daemon stores version/compatRange but never

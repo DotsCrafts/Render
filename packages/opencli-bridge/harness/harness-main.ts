@@ -6,8 +6,9 @@
  *
  *   1. boots a hidden BaseWindow + a single WebContentsView (the bridge's leased
  *      surface — Render's OWN Chromium, not system Chrome),
- *   2. starts the bridge as contextId 3k59e8nw (the daemon's defaultContextId),
- *      so the CLI resolves US as the active browser profile,
+ *   2. starts the bridge as contextId `render` (Render's OWN, distinct profile —
+ *      NOT the system-Chrome `3k59e8nw`), so it coexists with system Chrome and
+ *      the CLI resolves US only when targeting `--profile render`,
  *   3. writes every `/ext` wire frame to an ndjson evidence log,
  *   4. signals readiness (a sentinel line on stdout) so the runner can fire
  *      `opencli google search` and assert the results came through THIS view.
@@ -25,7 +26,7 @@ import { createWebContentsLeaseProvider } from '../src/view-provider.js';
 import type { FrameRecord } from '../src/types.js';
 import type { WcContents } from '../src/webcontents-target.js';
 
-const CONTEXT_ID = process.env.BRIDGE_CONTEXT_ID ?? '3k59e8nw';
+const CONTEXT_ID = process.env.BRIDGE_CONTEXT_ID ?? 'render';
 const FRAME_LOG = process.env.BRIDGE_FRAME_LOG ?? resolve(process.cwd(), 'harness/evidence/frames.ndjson');
 const READY_SENTINEL = '__BRIDGE_READY__';
 

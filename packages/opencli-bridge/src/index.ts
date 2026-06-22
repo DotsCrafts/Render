@@ -7,7 +7,14 @@ export type { WcContents, WcDebugger, WebContentsTargetDeps } from './webcontent
 export { createWebContentsLeaseProvider } from './view-provider.js';
 export type { MintedView, WebContentsLeaseDeps } from './view-provider.js';
 export { dispatch } from './actions.js';
-export { DEFAULT_CONTEXT_ID, helloFrame, ok, fail } from './protocol.js';
+export {
+  RENDER_CONTEXT_ID,
+  SYSTEM_CHROME_CONTEXT_ID,
+  DEFAULT_CONTEXT_ID,
+  helloFrame,
+  ok,
+  fail,
+} from './protocol.js';
 export {
   StalePageError,
   type CdpTarget,
