@@ -69,6 +69,7 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.tabClose]: (_e, tabId: string) => tabs.close(tabId),
     [IPC.tabActivate]: (_e, tabId: string) => tabs.activate(tabId),
     [IPC.setPanelWidth]: (_e, width: number) => tabs.setPanelWidth(width),
+    [IPC.setOverlay]: (_e, hidden: boolean) => tabs.setContentHidden(hidden),
     [IPC.getState]: () => ({ tabs: tabs.snapshot(), events: eventLog.slice() }),
 
     // codex provider/auth — each mutation returns the fresh status so the

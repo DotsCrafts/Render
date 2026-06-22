@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { useRenderState } from './useRenderState.js';
 import { TabStrip } from './components/TabStrip.js';
 import { Omnibox } from './components/Omnibox.js';
@@ -14,6 +14,12 @@ import { CodexSettings } from './components/CodexSettings.js';
 export function App(): ReactElement {
   const { tabs, activeTab, events, busy, actions } = useRenderState();
   const [showSettings, setShowSettings] = useState(false);
+
+  // Native page views composite over the chrome renderer, so they'd occlude the
+  // settings modal. Hide them while it's open, restore on close.
+  useEffect(() => {
+    void window.render.setOverlay(showSettings);
+  }, [showSettings]);
 
   return (
     <div className="app">

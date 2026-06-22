@@ -46,6 +46,7 @@ export class TabManager {
   private activeId: string | null = null;
   private panelOpen = true;
   private panelWidth: number = CHROME.panelWidth;
+  private contentHidden = false;
   private seq = 0;
 
   constructor(deps: TabManagerDeps) {
@@ -119,10 +120,26 @@ export class TabManager {
     this.activeId = id;
     for (const [tabId, tab] of this.tabs) {
       const isActive = tabId === id;
-      tab.view.setVisible(isActive);
+      // honor contentHidden so re-activation while a modal is open keeps the
+      // native page view hidden (it would otherwise occlude the renderer modal).
+      tab.view.setVisible(isActive && !this.contentHidden);
       if (isActive) tab.view.setBounds(this.bounds());
     }
     this.emit();
+  }
+
+  /**
+   * Hide/show the page WebContentsViews. The chrome renderer is the BASE layer;
+   * native page views composite ON TOP of it, so a renderer modal in the content
+   * region is occluded by the active tab. Renderer toggles this while a modal
+   * (e.g. Codex settings) is open so the overlay is actually visible.
+   */
+  setContentHidden(hidden: boolean): void {
+    if (this.contentHidden === hidden) return;
+    this.contentHidden = hidden;
+    for (const [id, tab] of this.tabs) {
+      tab.view.setVisible(!hidden && id === this.activeId);
+    }
   }
 
   async navigate(id: string, url: string): Promise<void> {

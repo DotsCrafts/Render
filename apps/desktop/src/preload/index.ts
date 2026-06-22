@@ -25,6 +25,7 @@ const api: RenderApi = {
   tabClose: (tabId) => ipcRenderer.invoke(IPC.tabClose, tabId),
   tabActivate: (tabId) => ipcRenderer.invoke(IPC.tabActivate, tabId),
   setPanelWidth: (width) => ipcRenderer.invoke(IPC.setPanelWidth, width),
+  setOverlay: (hidden) => ipcRenderer.invoke(IPC.setOverlay, hidden),
   getState: () => ipcRenderer.invoke(IPC.getState),
 
   codexStatus: () => ipcRenderer.invoke(IPC.codexStatus),

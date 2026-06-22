@@ -81,6 +81,7 @@ export const IPC = {
   tabClose: 'render:tabClose',
   tabActivate: 'render:tabActivate',
   setPanelWidth: 'render:setPanelWidth', // (width:number) — resize the agent panel
+  setOverlay: 'render:setOverlay', // (hidden:boolean) — hide page views for a renderer modal
   getState: 'render:getState',
 
   // codex provider/auth (Phase A) — all return CodexProviderStatus
@@ -105,6 +106,8 @@ export interface RenderApi {
   tabClose(tabId: string): Promise<void>;
   tabActivate(tabId: string): Promise<void>;
   setPanelWidth(width: number): Promise<void>;
+  /** hide/show native page views so a renderer modal isn't occluded by them */
+  setOverlay(hidden: boolean): Promise<void>;
   getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[] }>;
   codexStatus(): Promise<CodexProviderStatus>;
   codexSetProvider(p: CodexProviderConfig): Promise<CodexProviderStatus>;
