@@ -21,6 +21,18 @@ const AUTH_TEXT =
 /** opencli global flags that precede the <site> token and carry a value. */
 const VALUE_FLAGS = new Set(['--profile', '-f', '--format']);
 
+/**
+ * opencli's OWN top-level subcommands — these are NOT site adapters, so an
+ * `opencli list` / `opencli auth` is never a "needs login" situation. Critically,
+ * `opencli list -f json` dumps every adapter's description, which contains words
+ * like "login" / "sign in" / "not logged in" — without this denylist the text
+ * heuristic below false-fires and mislabels the site as "list".
+ */
+const NON_SITE_COMMANDS = new Set([
+  'list', 'validate', 'verify', 'skills', 'auth', 'convention-audit', 'browser',
+  'doctor', 'completion', 'plugin', 'adapter', 'profile', 'daemon', 'external',
+]);
+
 export interface OpencliAuthNeed {
   /** the opencli adapter alias to log into, e.g. "dianping" */
   site: string;
@@ -38,8 +50,13 @@ export function detectOpencliAuthNeed(item: CodexItem): OpencliAuthNeed | null {
   if (!site) return null;
 
   const output = collectOutput(item);
+  // exit 77 is opencli's authoritative AUTH_REQUIRED signal. The text heuristic
+  // is a fallback ONLY for a genuinely-failed command (non-zero exit) — a
+  // SUCCEEDED command (exit 0, e.g. `opencli list`) must never trigger it, since
+  // its output legitimately contains login-related words.
   const authByExit = item.exitCode === AUTH_REQUIRED_EXIT;
-  const authByText = AUTH_TEXT.test(output);
+  const authByText =
+    typeof item.exitCode === 'number' && item.exitCode !== 0 && AUTH_TEXT.test(output);
   if (!authByExit && !authByText) return null;
 
   const urlMatch = output.match(/https?:\/\/[^\s"')]+/);
