@@ -44,6 +44,7 @@ export const IPC = {
   tabCreate: 'render:tabCreate',
   tabClose: 'render:tabClose',
   tabActivate: 'render:tabActivate',
+  setPanelWidth: 'render:setPanelWidth', // (width:number) — resize the agent panel
   getState: 'render:getState',
 
   // main → renderer (emit)
@@ -60,6 +61,7 @@ export interface RenderApi {
   tabCreate(url?: string): Promise<{ tabId: string }>;
   tabClose(tabId: string): Promise<void>;
   tabActivate(tabId: string): Promise<void>;
+  setPanelWidth(width: number): Promise<void>;
   getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[] }>;
   onAgentEvent(cb: (e: AgentEvent) => void): () => void;
   onTabsChanged(cb: (tabs: TabState[]) => void): () => void;

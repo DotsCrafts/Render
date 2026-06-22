@@ -59,6 +59,7 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.tabCreate]: (_e, url?: string) => ({ tabId: tabs.create(url) }),
     [IPC.tabClose]: (_e, tabId: string) => tabs.close(tabId),
     [IPC.tabActivate]: (_e, tabId: string) => tabs.activate(tabId),
+    [IPC.setPanelWidth]: (_e, width: number) => tabs.setPanelWidth(width),
     [IPC.getState]: () => ({ tabs: tabs.snapshot(), events: eventLog.slice() }),
 
     [CHROME_IPC.back]: (_e, tabId: string) => tabs.goBack(tabId),

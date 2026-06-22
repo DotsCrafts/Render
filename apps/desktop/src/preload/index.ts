@@ -17,6 +17,7 @@ const api: RenderApi = {
   tabCreate: (url) => ipcRenderer.invoke(IPC.tabCreate, url),
   tabClose: (tabId) => ipcRenderer.invoke(IPC.tabClose, tabId),
   tabActivate: (tabId) => ipcRenderer.invoke(IPC.tabActivate, tabId),
+  setPanelWidth: (width) => ipcRenderer.invoke(IPC.setPanelWidth, width),
   getState: () => ipcRenderer.invoke(IPC.getState),
 
   onAgentEvent: (cb: (e: AgentEvent) => void) => {

@@ -4,7 +4,7 @@
  */
 :root {
   --top-bar: 84px;
-  --panel-width: 360px;
+  --panel-width: 460px; /* MUST match main/layout.ts CHROME.panelWidth (default; resizable) */
   --bottom-band: 76px;
 
   --bg: #0d1117;
@@ -252,6 +252,32 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+/* drag handle on the panel's left edge — resize the agent panel */
+.panel-resize {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 20;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.panel-resize::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+}
+.panel-resize:hover::after,
+.panel-resize.dragging::after {
+  background: var(--accent, #6ee7b7);
 }
 .panel header {
   padding: 12px 14px;

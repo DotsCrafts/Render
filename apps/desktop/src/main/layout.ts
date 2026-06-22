@@ -10,9 +10,16 @@
 
 export const CHROME = {
   topBar: 84, // tab strip + omnibox
-  panelWidth: 360, // right-side agent event-stream panel
+  panelWidth: 460, // right-side agent panel — DEFAULT; user-resizable at runtime
+  panelMin: 300,
+  panelMax: 820,
   bottomBand: 76, // floating input band (never covered by a page)
 } as const;
+
+export function clampPanelWidth(w: number): number {
+  if (!Number.isFinite(w)) return CHROME.panelWidth;
+  return Math.max(CHROME.panelMin, Math.min(CHROME.panelMax, Math.round(w)));
+}
 
 export interface Bounds {
   x: number;
@@ -22,8 +29,13 @@ export interface Bounds {
 }
 
 /** The rect a web page occupies inside the content area, given window size. */
-export function contentBounds(winWidth: number, winHeight: number, panelOpen: boolean): Bounds {
-  const right = panelOpen ? CHROME.panelWidth : 0;
+export function contentBounds(
+  winWidth: number,
+  winHeight: number,
+  panelOpen: boolean,
+  panelWidth: number = CHROME.panelWidth,
+): Bounds {
+  const right = panelOpen ? panelWidth : 0;
   return {
     x: 0,
     y: CHROME.topBar,

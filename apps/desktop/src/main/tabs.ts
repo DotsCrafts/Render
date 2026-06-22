@@ -10,7 +10,7 @@
 
 import { WebContentsView, type BaseWindow, type WebContents } from 'electron';
 import type { TabState } from '@render/protocol';
-import { contentBounds, type Bounds } from './layout.js';
+import { CHROME, clampPanelWidth, contentBounds, type Bounds } from './layout.js';
 
 export const HOME_URL = 'about:blank';
 const BLANK_URLS = new Set(['', 'about:blank', HOME_URL]);
@@ -33,6 +33,7 @@ export class TabManager {
   private order: string[] = [];
   private activeId: string | null = null;
   private panelOpen = true;
+  private panelWidth: number = CHROME.panelWidth;
   private seq = 0;
 
   constructor(deps: TabManagerDeps) {
@@ -134,6 +135,12 @@ export class TabManager {
     this.relayout();
   }
 
+  /** Resize the agent panel — re-insets the page views to match (clamped). */
+  setPanelWidth(width: number): void {
+    this.panelWidth = clampPanelWidth(width);
+    this.relayout();
+  }
+
   /** The live webContents for a tab — consumed by the CDP human-hand. */
   getTarget(id: string): WebContents | undefined {
     return this.tabs.get(id)?.view.webContents;
@@ -168,7 +175,7 @@ export class TabManager {
 
   private bounds(): Bounds {
     const [w, h] = this.window.getContentSize();
-    return contentBounds(w, h, this.panelOpen);
+    return contentBounds(w, h, this.panelOpen, this.panelWidth);
   }
 
   private stateOf(tab: Tab): TabState {

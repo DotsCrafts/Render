@@ -32,13 +32,13 @@ export function RenderSurface({ spec }: { spec: UxRenderSpec }) {
     [spec.title, spec.body, spec.items],
   );
 
-  if (isFullSpec(spec.ui)) {
-    const dynamic = spec.ui;
-    return (
-      <SpecErrorBoundary fallback={<SpecRenderer spec={simple} handlers={NO_OP} />}>
-        <SpecRenderer spec={dynamic} handlers={NO_OP} />
-      </SpecErrorBoundary>
-    );
-  }
-  return <SpecRenderer spec={simple} handlers={NO_OP} />;
+  const content = isFullSpec(spec.ui) ? (
+    <SpecErrorBoundary fallback={<SpecRenderer spec={simple} handlers={NO_OP} />}>
+      <SpecRenderer spec={spec.ui} handlers={NO_OP} />
+    </SpecErrorBoundary>
+  ) : (
+    <SpecRenderer spec={simple} handlers={NO_OP} />
+  );
+  // wide content (e.g. a big Table) scrolls horizontally instead of clipping
+  return <div className="max-w-full overflow-x-auto">{content}</div>;
 }
