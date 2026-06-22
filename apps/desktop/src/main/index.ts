@@ -19,6 +19,7 @@ import { runCdpSelfTest } from './cdp-selftest.js';
 import { enableRenderCdp } from './cdp-port.js';
 import { registerRenderOpencliApp } from './opencli-render-app.js';
 import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
+import { createCodexProvider } from './codex-provider.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
 
@@ -72,6 +73,11 @@ function wire(win: BrowserWindow): void {
   const bridgeEnabled = process.env.RENDER_OPENCLI_BRIDGE !== '0';
   const bridgeProfile = bridgeEnabled ? renderBridgeProfile() : undefined;
 
+  // Codex provider/auth (Phase A): Render owns model-provider config + creds.
+  // When a Render credential exists, the runtime uses a CODEX_HOME materialized
+  // from it instead of copying the user's ~/.codex.
+  const codexProvider = createCodexProvider();
+
   // Brain: codex app-server runs in a SECOND sandbox owned by the runtime.
   const agent = createAgentRuntime({
     emit: (event) => broker.emitAgent(event),
@@ -87,6 +93,8 @@ function wire(win: BrowserWindow): void {
     openTab: (url) => tabs.openUrl(url),
     // route the agent's cookie/browser opencli calls to Render's bridge profile.
     opencliProfile: bridgeProfile,
+    // prefer a Render-managed CODEX_HOME (provider + creds from settings).
+    materializeCodexHome: () => codexProvider.materializeCodexHome(),
     now: () => Date.now(),
   });
 

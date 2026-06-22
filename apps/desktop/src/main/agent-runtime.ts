@@ -78,6 +78,12 @@ export interface AgentRuntimeDeps {
   model?: string;
   /** echo raw codex JSONL frames to stderr (diagnostics only) */
   logRaw?: boolean;
+  /**
+   * Materialize a Render-managed hook-free CODEX_HOME (provider + credential set
+   * in Render's settings). Returns null when no Render credential exists, so the
+   * runtime falls back to copying the user's ~/.codex.
+   */
+  materializeCodexHome?: () => Promise<CodexHome | null>;
 }
 
 interface PendingHitl {
@@ -213,8 +219,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     if (!startPromise) {
       startPromise = (async () => {
         // Render owns the approval UX, so run codex against a hook-free home —
-        // approvals then arrive over the protocol as our ux confirm/form.
-        codexHome = await prepareCodexHome();
+        // approvals then arrive over the protocol as our ux confirm/form. Prefer a
+        // Render-managed home (provider/auth set in Render's settings); fall back
+        // to copying the user's ~/.codex when no Render credential exists.
+        codexHome = (await deps.materializeCodexHome?.()) ?? (await prepareCodexHome());
         const env: Record<string, string> = {};
         if (codexHome) env.CODEX_HOME = codexHome.path;
         // opencli's default profile (~/.opencli/browser-profiles.json) is often a
