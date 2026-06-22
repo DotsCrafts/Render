@@ -40,6 +40,7 @@ import {
   parseRenderOpen,
 } from './agent-instructions.js';
 import { answerToUxMessage } from './answer-to-ux.js';
+import { detectOpencliAuthNeed } from './opencli-auth.js';
 
 export interface AgentRuntime {
   submit(text: string): Promise<{ turnId: string }>;
@@ -83,6 +84,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   const pendingHitl = new Map<string, PendingHitl>();
   // ux id → opencli site, for the needs-login → login round-trip.
   const pendingLogin = new Map<string, string>();
+  // sites we've already surfaced a login card for this turn, so a retry storm
+  // of AUTH_REQUIRED commands doesn't spam duplicate login surfaces.
+  const loginPrompted = new Set<string>();
   let session: AgentSession | null = null;
   let codexHome: CodexHome | null = null;
   let startPromise: Promise<void> | null = null;
@@ -152,6 +156,32 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
             },
           });
           return; // don't also show the raw shim command row
+        }
+        // The agent ran opencli directly and it failed because the site needs a
+        // logged-in session. opencli signals this (exit 77 / AUTH_REQUIRED) but
+        // the agent just narrates it and falls back to a public source — so the
+        // `login` HITL surface (which lives only on the router path) never fires.
+        // Surface it here from the agent's own command stream: one card per site.
+        const authNeed = detectOpencliAuthNeed(event.item);
+        if (authNeed && !loginPrompted.has(authNeed.site)) {
+          loginPrompted.add(authNeed.site);
+          const id = `ux-login-${++uxSeq}`;
+          pendingLogin.set(id, authNeed.site);
+          deps.emit({
+            kind: 'ux',
+            message: {
+              id,
+              kind: 'login',
+              blocking: false, // don't freeze the agent; offer login alongside its fallback
+              ts: deps.now(),
+              spec: {
+                site: authNeed.site,
+                reason: `opencli needs a logged-in ${authNeed.site} session — log in here and I can pull the full ${authNeed.site} data.`,
+                ...(authNeed.loginUrl ? { loginUrl: authNeed.loginUrl } : {}),
+              },
+            },
+          });
+          // fall through: still forward the command row so the stream stays truthful
         }
       }
       if (event.kind === 'item' && event.item.type === 'agentMessage') {
@@ -262,6 +292,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 
   const resolveLogin = async (site: string, result: UxLoginResult): Promise<void> => {
+    // allow a fresh login card if this site's session lapses again later
+    loginPrompted.delete(site);
     if (result.action !== 'login_done') return;
     try {
       const { loggedIn, account } = await deps.router.login(site);
@@ -277,6 +309,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   const dispose = async (): Promise<void> => {
     pendingHitl.clear();
     pendingLogin.clear();
+    loginPrompted.clear();
     if (session) await session.dispose();
     if (codexHome) await codexHome.cleanup();
   };
