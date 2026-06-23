@@ -61,6 +61,8 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.steerTurn]: (_e, text: string) => agent.steer(text),
     [IPC.cancelTurn]: () => agent.cancel(),
     [IPC.resolveUx]: (_e, id: string, result: UxResult) => agent.resolveUx(id, result),
+    // new conversation ⟺ new tab group: fresh codex thread + the next group.
+    [IPC.newConversation]: () => agent.newConversation(),
     // (agent runtime methods are async; ipcMain.handle awaits the returned promise)
 
     [IPC.tabNavigate]: (_e, payload: { tabId: string; url: string }) =>

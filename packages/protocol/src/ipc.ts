@@ -76,6 +76,7 @@ export const IPC = {
   steerTurn: 'render:steerTurn', // (text)
   cancelTurn: 'render:cancelTurn',
   resolveUx: 'render:resolveUx', // (id, UxResult)
+  newConversation: 'render:newConversation', // () → TabGroupInfo — fresh thread + tab group
   tabNavigate: 'render:tabNavigate', // ({tabId,url})
   tabCreate: 'render:tabCreate',
   tabClose: 'render:tabClose',
@@ -101,6 +102,8 @@ export interface RenderApi {
   steerTurn(text: string): Promise<void>;
   cancelTurn(): Promise<void>;
   resolveUx(id: string, result: UxResult): Promise<void>;
+  /** Start a fresh agent conversation (new codex thread + new tab group). */
+  newConversation(): Promise<TabGroupInfo>;
   tabNavigate(tabId: string, url: string): Promise<void>;
   tabCreate(url?: string): Promise<{ tabId: string }>;
   tabClose(tabId: string): Promise<void>;

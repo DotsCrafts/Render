@@ -91,6 +91,9 @@ function wire(win: BrowserWindow): void {
     // the `render-open` tool: open a page in Render's OWN browser, not system Chrome.
     // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange.
     openTab: (url) => tabs.openUrl(url),
+    // register each conversation's tab group (label/color) when it becomes active
+    // so the strip can chip it even before the bridge mints its first tab.
+    registerGroup: (group) => tabs.ensureGroup(group),
     // route the agent's cookie/browser opencli calls to Render's bridge profile.
     opencliProfile: bridgeProfile,
     // prefer a Render-managed CODEX_HOME (provider + creds from settings).
@@ -105,7 +108,12 @@ function wire(win: BrowserWindow): void {
   // Render as REAL tabs in the agent's owned tab group: `<site> login` opens a
   // visible tab the user logs into, and because every bridge tab shares the
   // `persist:render` session, that login authenticates the agent's commands.
-  const opencliBridge = bridgeEnabled ? maybeWireOpencliBridge({ tabs }) : null;
+  // Bridge tabs join the CURRENT conversation's group, read at mint time from the
+  // agent runtime (new group ⟺ new conversation). The runtime is the conversation
+  // owner — it allocates groups and starts fresh codex threads in lockstep.
+  const opencliBridge = bridgeEnabled
+    ? maybeWireOpencliBridge({ tabs, activeGroup: () => agent.activeGroup() })
+    : null;
 
   // Guard the chrome shell: a link clicked inside the agent panel must NEVER
   // replace the app UI. Any top-level navigation away from the renderer origin

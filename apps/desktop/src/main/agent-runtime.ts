@@ -24,6 +24,7 @@ import type {
   OpencliInvocation,
   SandboxMode,
   SandboxProvider,
+  TabGroupInfo,
   UxKind,
   UxLoginResult,
   UxMessage,
@@ -41,12 +42,24 @@ import {
 } from './agent-instructions.js';
 import { answerToUxMessage } from './answer-to-ux.js';
 import { detectOpencliAuthNeed } from './opencli-auth.js';
+import { createConversationGroups, type ConversationGroups } from './conversation-groups.js';
 
 export interface AgentRuntime {
   submit(text: string): Promise<{ turnId: string }>;
   steer(text: string): Promise<void>;
   cancel(): Promise<void>;
   resolveUx(id: string, result: UxResult): Promise<void>;
+  /**
+   * The CURRENT conversation's browser tab group — read by the opencli bridge at
+   * tab-mint time so agent tabs join the active conversation's group.
+   */
+  activeGroup(): TabGroupInfo;
+  /**
+   * Start a FRESH conversation: tear down the current codex thread (the next
+   * submit lazily starts a new one) and allocate the next tab group, so the
+   * agent's subsequent tabs land in a new group. New group ⟺ new conversation.
+   */
+  newConversation(): Promise<TabGroupInfo>;
   dispose(): Promise<void>;
 }
 
@@ -59,6 +72,12 @@ export interface AgentRuntimeDeps {
   router: OpencliRouterHandle;
   /** open a URL in Render's OWN browser tab (human-hand) — the `render-open` tool */
   openTab?: (url: string) => void;
+  /**
+   * Register a conversation's tab group (label/color) with the TabManager when it
+   * becomes active, so snapshots can render its chip even before the bridge mints
+   * its first tab. Wired to `tabs.ensureGroup` by index.ts.
+   */
+  registerGroup?: (group: TabGroupInfo) => void;
   /**
    * The opencli profile the agent's cookie/browser commands route to. When the
    * bridge is on this is Render's own profile (`render`), so logged-in scraping
@@ -104,6 +123,12 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   let startPromise: Promise<void> | null = null;
   let turnSeq = 0;
   let uxSeq = 0;
+  // Per-conversation tab groups: conv-1 is the degenerate single-group case.
+  // Each time a group becomes active we register it with the TabManager so its
+  // label/color are known to snapshots before the bridge mints a tab into it.
+  const conversations: ConversationGroups = createConversationGroups((group) => {
+    deps.registerGroup?.(group);
+  });
 
   const buildSession = (env?: Record<string, string>): AgentSession => {
     const s = new AgentSession({
@@ -337,6 +362,31 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     });
   };
 
+  const activeGroup = (): TabGroupInfo => conversations.current();
+
+  const newConversation = async (): Promise<TabGroupInfo> => {
+    // Tear down the current codex thread so the NEXT submit lazily starts a fresh
+    // one (ensureStarted re-runs once startPromise is cleared). Per-turn HITL /
+    // login state belongs to the old conversation, so clear it too.
+    if (session) {
+      const old = session;
+      session = null;
+      startPromise = null;
+      await old.dispose();
+    }
+    if (codexHome) {
+      await codexHome.cleanup();
+      codexHome = null;
+    }
+    pendingHitl.clear();
+    pendingLogin.clear();
+    loginPrompted.clear();
+    // Allocate the next group; subsequent agent tabs (minted by the bridge) join
+    // it. We don't open an initial tab — the active group is set for the next
+    // agent action, matching the bridge's lazy mint-on-demand model.
+    return conversations.next();
+  };
+
   const dispose = async (): Promise<void> => {
     pendingHitl.clear();
     pendingLogin.clear();
@@ -345,7 +395,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     if (codexHome) await codexHome.cleanup();
   };
 
-  return { submit, steer, cancel, resolveUx, dispose };
+  return { submit, steer, cancel, resolveUx, activeGroup, newConversation, dispose };
 }
 
 function loginOpenedUx(site: string, url: string, opened: boolean, id: string, ts: number): UxMessage {

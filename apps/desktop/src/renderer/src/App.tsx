@@ -30,6 +30,7 @@ export function App(): ReactElement {
           onActivate={actions.activateTab}
           onClose={actions.closeTab}
           onNew={actions.newTab}
+          onNewConversation={actions.newConversation}
         />
         <Omnibox
           activeTab={activeTab}

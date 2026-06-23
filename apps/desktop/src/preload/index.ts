@@ -20,6 +20,7 @@ const api: RenderApi = {
   steerTurn: (text) => ipcRenderer.invoke(IPC.steerTurn, text),
   cancelTurn: () => ipcRenderer.invoke(IPC.cancelTurn),
   resolveUx: (id: string, result: UxResult) => ipcRenderer.invoke(IPC.resolveUx, id, result),
+  newConversation: () => ipcRenderer.invoke(IPC.newConversation),
   tabNavigate: (tabId, url) => ipcRenderer.invoke(IPC.tabNavigate, { tabId, url }),
   tabCreate: (url) => ipcRenderer.invoke(IPC.tabCreate, url),
   tabClose: (tabId) => ipcRenderer.invoke(IPC.tabClose, tabId),

@@ -19,6 +19,7 @@ export interface RenderState {
     resolveUx: (id: string, result: UxResult) => void;
     navigate: (url: string) => void;
     newTab: () => void;
+    newConversation: () => void;
     closeTab: (id: string) => void;
     activateTab: (id: string) => void;
     back: () => void;
@@ -86,6 +87,9 @@ export function useRenderState(): RenderState {
     const { tabId } = await window.render.tabCreate();
     setActiveId(tabId);
   }, []);
+  // New group ⟺ new conversation: starts a fresh codex thread + tab group.
+  // The agent's next tabs land in the new group; no tab is opened up front.
+  const newConversation = useCallback(() => void window.render.newConversation(), []);
   const closeTab = useCallback((id: string) => void window.render.tabClose(id), []);
   const activateTab = useCallback((id: string) => {
     setActiveId(id);
@@ -115,6 +119,7 @@ export function useRenderState(): RenderState {
       resolveUx,
       navigate,
       newTab,
+      newConversation,
       closeTab,
       activateTab,
       back,

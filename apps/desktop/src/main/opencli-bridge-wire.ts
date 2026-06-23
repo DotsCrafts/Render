@@ -40,6 +40,7 @@ import {
   type BridgeHandle,
   type DispatchCaps,
 } from '@render/opencli-bridge';
+import type { TabGroupInfo } from '@render/protocol';
 import { bindDefaultProfile } from './opencli-profile-bind.js';
 
 export interface OpencliBridgeWire {
@@ -70,9 +71,17 @@ export interface BridgeTabHost {
 export interface OpencliBridgeWireDeps {
   /** Render's tab manager — the bridge mints its owned tab group through it. */
   tabs: BridgeTabHost;
+  /**
+   * The CURRENT agent conversation's tab group, read at mint time. New lease tabs
+   * join whichever conversation is active when they're minted (new group ⟺ new
+   * conversation), so a conversation switch routes subsequent agent tabs to the
+   * new group. Defaults to the original single `agent` group when unset, keeping
+   * the pre-conversation behavior as the degenerate case.
+   */
+  activeGroup?: () => TabGroupInfo;
 }
 
-/** The agent's owned tab group — all of a session's bridge leases live here. */
+/** Fallback group when no conversation owner is wired — the original behavior. */
 const AGENT_GROUP = { id: 'agent', label: 'Agent', color: '#7c93ff' } as const;
 
 /**
@@ -85,15 +94,21 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
   // Chromium. Set RENDER_OPENCLI_BRIDGE=0 to fall back to the system-Chrome bridge.
   if (process.env.RENDER_OPENCLI_BRIDGE === '0') return null;
 
-  // Each lease is a REAL, VISIBLE Render tab in the agent's owned tab group.
-  // `tabs new` (incl. the lazy first lease of a `<site> login`) opens an active
-  // tab the user can SEE and interact with — so login QR/password works — and
-  // the page shares the user's `persist:render` session, so the cookie it sets
-  // authenticates the agent's later opencli commands.
-  deps.tabs.ensureGroup(AGENT_GROUP);
+  // Each lease is a REAL, VISIBLE Render tab in the CURRENT conversation's tab
+  // group. `tabs new` (incl. the lazy first lease of a `<site> login`) opens an
+  // active tab the user can SEE and interact with — so login QR/password works —
+  // and the page shares the user's `persist:render` session, so the cookie it
+  // sets authenticates the agent's later opencli commands. The group is read at
+  // MINT time, so tabs minted after a conversation switch join the new group.
+  const groupOf = deps.activeGroup ?? ((): TabGroupInfo => AGENT_GROUP);
+  deps.tabs.ensureGroup(groupOf());
   const provider = createMultiWebContentsLeaseProvider({
     mintView: async () => {
-      const id = deps.tabs.create('about:blank', { activate: true, groupId: AGENT_GROUP.id });
+      const group = groupOf();
+      // ensure the group is registered so its label/color are known to snapshots,
+      // even if this is the first tab the conversation mints.
+      deps.tabs.ensureGroup(group);
+      const id = deps.tabs.create('about:blank', { activate: true, groupId: group.id });
       const webContents = deps.tabs.getTarget(id);
       if (!webContents) throw new Error('bridge: minted tab has no webContents');
       return {

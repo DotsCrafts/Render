@@ -116,7 +116,8 @@ body {
   }
 }
 .tab .close,
-.tab-new {
+.tab-new,
+.tab-new-conversation {
   -webkit-app-region: no-drag;
   border: none;
   background: transparent;
@@ -128,13 +129,19 @@ body {
   border-radius: 6px;
 }
 .tab .close:hover,
-.tab-new:hover {
+.tab-new:hover,
+.tab-new-conversation:hover {
   background: var(--line);
   color: var(--ink);
 }
-.tab-new {
+.tab-new,
+.tab-new-conversation {
   align-self: center;
   font-size: 18px;
+}
+/* the new-conversation affordance: starts a fresh agent thread + tab group. */
+.tab-new-conversation {
+  color: var(--accent2);
 }
 
 /* ── tab group (the agent's owned tab group) ─────────────────────────────── */

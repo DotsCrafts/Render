@@ -7,6 +7,8 @@ interface Props {
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  /** Start a fresh agent conversation — new codex thread + new tab group. */
+  onNewConversation: () => void;
 }
 
 /** A run of consecutive tabs — either loose (no group) or one tab group. */
@@ -37,7 +39,14 @@ function toSegments(tabs: TabState[]): Segment[] {
   return segments;
 }
 
-export function TabStrip({ tabs, activeId, onActivate, onClose, onNew }: Props): ReactElement {
+export function TabStrip({
+  tabs,
+  activeId,
+  onActivate,
+  onClose,
+  onNew,
+  onNewConversation,
+}: Props): ReactElement {
   const renderTab = (tab: TabState): ReactElement => (
     <div
       key={tab.id}
@@ -79,6 +88,14 @@ export function TabStrip({ tabs, activeId, onActivate, onClose, onNew }: Props):
       )}
       <button className="tab-new" onClick={onNew} aria-label="new tab">
         +
+      </button>
+      <button
+        className="tab-new-conversation"
+        onClick={onNewConversation}
+        aria-label="new conversation"
+        title="New conversation (new agent tab group)"
+      >
+        ⊕
       </button>
     </div>
   );
