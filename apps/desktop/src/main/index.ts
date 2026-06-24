@@ -21,6 +21,7 @@ import { registerRenderOpencliApp } from './opencli-render-app.js';
 import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
 import { createCodexProvider } from './codex-provider.js';
 import { startHomePortal } from './home-portal.js';
+import { installAppMenu } from './app-menu.js';
 import { ensureOpencliDaemon } from './opencli-daemon.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
@@ -174,6 +175,18 @@ function wire(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url && url !== 'about:blank') void tabs.create(url); // window.open → new tab
     return { action: 'deny' };
+  });
+
+  // Browser-correct keyboard semantics: Cmd+W closes the active TAB (full
+  // teardown), not the whole window. New tab opens the home portal.
+  installAppMenu({
+    closeActiveTab: () => {
+      const id = tabs.activeTabId;
+      if (id) tabs.close(id);
+    },
+    newTab: () => {
+      tabs.create();
+    },
   });
 
   // keep page views inset correctly as the window resizes
