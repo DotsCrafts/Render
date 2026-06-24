@@ -21,6 +21,7 @@ import { registerRenderOpencliApp } from './opencli-render-app.js';
 import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
 import { createCodexProvider } from './codex-provider.js';
 import { startHomePortal } from './home-portal.js';
+import { ensureOpencliDaemon } from './opencli-daemon.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
 
@@ -203,13 +204,20 @@ function wire(win: BrowserWindow): void {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Register Render as an opencli Electron app so `opencli render <cmd>` routes
   // to Render's embedded Chromium over CDP. Best-effort, idempotent, additive.
   if (renderCdp.enabled) {
     void registerRenderOpencliApp({ port: renderCdp.port }).then((r) => {
       if (!r.registered) console.warn('[render-cdp] opencli app registration skipped:', r.note);
     });
+  }
+
+  // OpenCLIApp starts its node daemon lazily on first CLI use. Warm it before
+  // wiring Render's /ext bridge and home portal so a cold boot does not strand
+  // the app with `defaultContextId=render` but no daemon listening on 19825.
+  if (process.env.RENDER_OPENCLI_BRIDGE !== '0' && !(await ensureOpencliDaemon())) {
+    console.warn('[opencli-daemon] daemon is still unreachable after warmup');
   }
 
   const win = createWindow();

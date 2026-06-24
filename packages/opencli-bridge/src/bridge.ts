@@ -50,6 +50,8 @@ export interface BridgeDeps {
   contextId?: string;
   /** Auto re-connect + re-hello when the daemon drops us (default true). */
   autoReconnect?: boolean;
+  /** Called after every successful socket open + hello, including reconnects. */
+  onConnect?: () => void;
   /** Observe every wire frame (TX/RX) — the harness uses this for evidence. */
   onFrame?: (record: FrameRecord) => void;
   /** Non-fatal diagnostics (no console.log noise inside the package). */
@@ -87,23 +89,38 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
     socket.send(JSON.stringify(frame));
   };
 
-  const onMessage = async (socket: WebSocket, raw: string): Promise<void> => {
+  // Commands are dispatched ONE AT A TIME, in arrival order. The bridge drives a
+  // SINGLE Chromium and shares lease state (mint / select / navigate); dispatching
+  // concurrently races that state and wedges the daemon after a burst — the root
+  // cause of "first few commands work, then everything hangs". A FIFO chain
+  // serializes them. Every dispatch op is bounded (navigate/eval carry timeouts;
+  // login-wait is the adapter's own whoami polling, not one long bridge command),
+  // so no single command can stall the queue indefinitely.
+  let dispatchQueue: Promise<void> = Promise.resolve();
+
+  const onMessage = (socket: WebSocket, raw: string): Promise<void> => {
     let cmd: CommandFrame;
     try {
       cmd = JSON.parse(raw) as CommandFrame;
     } catch (err) {
       reportError(new Error(`unparseable /ext frame: ${String(err)}`));
-      return;
+      return Promise.resolve();
     }
     record('RX', cmd);
-    let result: ResultFrame;
-    try {
-      result = await dispatch(deps.provider, cmd, deps.caps ?? {});
-    } catch (err) {
-      result = errorToResult(cmd.id, err);
-    }
-    record('TX', result);
-    send(socket, result);
+    const run = async (): Promise<void> => {
+      let result: ResultFrame;
+      try {
+        result = await dispatch(deps.provider, cmd, deps.caps ?? {});
+      } catch (err) {
+        result = errorToResult(cmd.id, err);
+      }
+      record('TX', result);
+      send(socket, result);
+    };
+    // chain onto the queue; run on both settle paths so one failure can't stall it.
+    const queued = dispatchQueue.then(run, run);
+    dispatchQueue = queued.catch(() => {});
+    return queued;
   };
 
   const scheduleReconnect = (): void => {
@@ -127,6 +144,11 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
         const hello = helloFrame(contextId);
         record('TX', hello);
         send(socket, hello);
+        try {
+          deps.onConnect?.();
+        } catch (err) {
+          reportError(err);
+        }
         resolve();
       });
       socket.on('message', (data) => void onMessage(socket, data.toString()));

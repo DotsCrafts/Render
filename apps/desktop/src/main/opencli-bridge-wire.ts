@@ -137,24 +137,28 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
   };
 
   const profile = renderBridgeProfile();
+  let restoreProfile: () => void = () => {};
+  const bindProfile = (): void => {
+    restoreProfile();
+    restoreProfile = bindDefaultProfile(profile);
+  };
   const bridge: BridgeHandle = createOpencliBridge({
     provider,
     caps,
     // Distinct, named profile — never the shared system-Chrome contextId.
     contextId: profile,
     onError: (err) => console.warn('[opencli-bridge]', err.message),
+    // The daemon can be restarted by OpenCLIApp/doctor/CLI version checks. Every
+    // reconnect re-registers our context, so re-bind the default at the same time.
+    onConnect: bindProfile,
   });
 
   // Once connected, make Render the daemon's DEFAULT profile so every opencli
   // command (agent sandbox, skills, the user's terminal) routes to Render's own
   // browser with no OPENCLI_PROFILE needed — the root fix for "none selected"
   // ambiguity. Bind after connect so we never become default-but-unreachable.
-  let restoreProfile: () => void = () => {};
   void bridge
     .start()
-    .then(() => {
-      restoreProfile = bindDefaultProfile(profile);
-    })
     .catch((err) => {
       console.warn('[opencli-bridge] failed to connect to daemon:', String(err));
     });
