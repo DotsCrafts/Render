@@ -182,9 +182,9 @@
         { key: 'arxiv', title: 'arXiv · cs.AI', color: '#b31b1b', src: 'arxiv recent',
           load: () => data('arxiv', 'recent', ['cs.AI'], { limit: 8 }),
           render: (d) => listHtml(rows(d), (r) => `<div class="row"><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}</a><span class="sub">${esc((r.authors||'').split(',')[0]||'')}</span></div>`) },
-        { key: 'binance', title: '币价 · Top', color: '#f0b90b', src: 'binance top',
-          load: () => data('binance', 'top', [], { limit: 8 }),
-          render: (d) => listHtml(rows(d), (r, i) => { const ch = Number(r.change_24h ?? r.change_pct ?? 0); return `<div class="row"><span class="rk">${i+1}</span><span class="tl">${esc(r.symbol)}</span><span class="ex ${ch>=0?'up':'dn'}">${ch>=0?'+':''}${ch.toFixed?ch.toFixed(2):ch}%</span><span class="sub">${esc(r.price)}</span></div>`; }) },
+        { key: 'crypto', title: '币价 · Top', color: '#f0b90b', src: 'coingecko top',
+          load: () => data('coingecko', 'top', [], { limit: 8 }),
+          render: (d) => listHtml(rows(d), (r, i) => { const ch = Number(r.change24hPct ?? 0); return `<div class="row"><span class="rk">${i+1}</span><span class="tl">${esc(r.symbol)} <span class="sub">${esc(r.name||'')}</span></span><span class="ex ${ch>=0?'up':'dn'}">${ch>=0?'+':''}${ch.toFixed(2)}%</span><span class="sub">$${esc(r.price)}</span></div>`; }) },
         { key: 'wttr', title: '天气', color: '#3aa0ff', src: 'wttr current',
           render: () => null /* custom mount below */ },
       ];
@@ -245,7 +245,7 @@
         const q = document.getElementById('q').value.trim(); if (!q) return;
         const box = document.getElementById('results'); box.className = 'on';
         box.innerHTML = `<article class="card"><h2><span class="ic" style="background:var(--accent)">⌕</span><span class="sp">全网搜索：${esc(q)}</span><span class="src">agg search</span></h2><div class="state"><span class="spin"></span>聚合多平台中…</div></article>`;
-        const res = await data('agg', 'search', [q], { limit: 14 });
+        const res = await data('agg', 'search', [q], { limit: 14, only: 'api' });
         const card = box.firstElementChild;
         if (!res.ok) { card.querySelector('.state').className = 'state err'; card.querySelector('.state').textContent = '⚠ ' + (res.error || res.code); return; }
         const rs = rows(res.data);

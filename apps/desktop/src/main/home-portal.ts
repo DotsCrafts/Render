@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Read commands the portal page is allowed to run through /ux/data (server-owned allowlist). */
-const PORTAL_ALLOW = 'bilibili ranking,36kr news,arxiv recent,binance top,wttr current,agg search';
+const PORTAL_ALLOW = 'bilibili ranking,36kr news,arxiv recent,coingecko top,wttr current,agg search';
 
 export interface HomePortal {
   /** The served portal URL once ready, else null (disabled / not yet up). */
