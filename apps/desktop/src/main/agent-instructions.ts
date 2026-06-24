@@ -78,7 +78,12 @@ flag runs in an EPHEMERAL session and WILL NOT see that login (it falsely report
       opencli <site> whoami --site-session persistent -f json
 
   If \`whoami\` shows \`logged_in: true\`, login SUCCEEDED — proceed. Only treat it as
-  truly failed if \`whoami --site-session persistent\` also says not logged in.
+  truly failed if \`whoami\` explicitly says \`logged_in: false\` / AUTH_REQUIRED.
+  **A \`whoami\` that ITSELF errors (e.g. \`ok:false\` "member page rendered but no
+  user_id link found") is NOT a failure** — it reached the logged-in page but its
+  own scraper drifted. Treat that as logged-in, proceed ONCE, and tell the user the
+  session looks active. NEVER loop login/whoami on that error — re-login won't fix a
+  scraper drift; it's an opencli adapter issue, not a missing cookie.
 - After confirmed login, re-run the original command WITH \`--site-session persistent\`.
 - Do NOT use \`render-open\` for login and do NOT tell the user to "log in in their
   own browser" — there is only Render.
