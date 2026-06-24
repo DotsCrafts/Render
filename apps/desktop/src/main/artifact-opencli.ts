@@ -62,7 +62,9 @@ export async function runArtifactOpencli(
   req: { site: string; command: string; args?: Record<string, string | number | boolean> },
   deps: ArtifactOpencliDeps = {},
 ): Promise<ArtifactOpencliResult> {
-  if (!isReadCommand(req.command)) {
+  // Prototype mode (default): no read-only restriction — an artifact runs opencli
+  // as freely as the agent. Re-enabled with RENDER_ARTIFACT_GATE=1.
+  if (process.env.RENDER_ARTIFACT_GATE === '1' && !isReadCommand(req.command)) {
     return {
       ok: false,
       error: `"${req.site} ${req.command}" is not a permitted read command (artifacts are read-only in M1)`,

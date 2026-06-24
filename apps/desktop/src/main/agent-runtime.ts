@@ -470,7 +470,13 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     artifactId: string,
     site: string,
     command: string,
-  ): Promise<{ ok: boolean; error?: string }> => capability.authorize(artifactId, site, command);
+  ): Promise<{ ok: boolean; error?: string }> =>
+    // Prototype mode (default): an artifact calls opencli as freely as the agent
+    // itself — no allowlist, no consent. The gate (allowlist + per-artifact
+    // consent) stays wired and flips back on with RENDER_ARTIFACT_GATE=1.
+    process.env.RENDER_ARTIFACT_GATE === '1'
+      ? capability.authorize(artifactId, site, command)
+      : Promise.resolve({ ok: true });
 
   const activeGroup = (): TabGroupInfo => conversations.current();
 
