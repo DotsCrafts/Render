@@ -41,12 +41,21 @@ export interface TabManagerDeps {
    * `window.renderArtifact` capability is exposed to artifact pages alone.
    */
   artifactPreload?: string;
+  /**
+   * Lazily resolves the home/new-tab URL — Render's default landing page is the
+   * opencli-served portal (`opencli ux serve`). Read at `create()` time (no arg),
+   * so a tab opened before the portal server is ready falls back to blank and the
+   * NEXT new tab gets the portal. Bridge leases pass `about:blank` explicitly, so
+   * they bypass this entirely.
+   */
+  homeUrl?: () => string | null;
 }
 
 export class TabManager {
   private readonly window: BaseWindow;
   private readonly onChange: (tabs: TabState[]) => void;
   private readonly artifactPreload?: string;
+  private readonly homeUrl?: () => string | null;
   private readonly tabs = new Map<string, Tab>();
   /** group id → group metadata (label/color), surfaced in every snapshot. */
   private readonly groups = new Map<string, TabGroupInfo>();
@@ -61,6 +70,7 @@ export class TabManager {
     this.window = deps.window;
     this.onChange = deps.onChange;
     if (deps.artifactPreload) this.artifactPreload = deps.artifactPreload;
+    if (deps.homeUrl) this.homeUrl = deps.homeUrl;
   }
 
   // ── public API ─────────────────────────────────────────────────────────────
@@ -70,7 +80,10 @@ export class TabManager {
     this.groups.set(info.id, info);
   }
 
-  create(url = HOME_URL, opts: { activate?: boolean; groupId?: string } = {}): string {
+  create(url?: string, opts: { activate?: boolean; groupId?: string } = {}): string {
+    // No explicit url → Render's home (the opencli portal) when available, else
+    // blank. An explicit url (incl. the bridge's 'about:blank' leases) is used verbatim.
+    const target = url ?? (this.homeUrl?.() || HOME_URL);
     const id = `tab-${++this.seq}`;
     const view = new WebContentsView({
       webPreferences: { sandbox: true, contextIsolation: true, partition: RENDER_PARTITION },
@@ -85,7 +98,7 @@ export class TabManager {
     this.window.contentView.addChildView(view);
     view.setBounds(this.bounds());
     view.setVisible(false);
-    void view.webContents.loadURL(url);
+    void view.webContents.loadURL(target);
 
     if (opts.activate ?? true) this.activate(id);
     else this.emit();

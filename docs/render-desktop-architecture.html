@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Render 本地桌面端架构（现状）</title>
+    <style>
+      :root {
+        --bg: #f6f7f9; --panel: #fff; --panel2: #eef1f5; --ink: #14171c; --soft: #5b6470;
+        --line: #e2e6ec; --accent: #2f6bff; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 6px 22px rgba(16,24,40,.07);
+        --brain: #7c5cff; --hands: #16a36a; --browser: #2f6bff; --danger: #e1493b; --warn: #d98a00;
+        --radius: 14px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg:#0c0e12; --panel:#15181e; --panel2:#1d2128; --ink:#eef1f5; --soft:#9aa4b2;
+          --line:#272d36; --accent:#5c8bff; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.35);
+          --brain:#a78bfa; --hands:#34d399; --browser:#5c8bff; --danger:#f87171; --warn:#fbbf24; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink);
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased; }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 80px; }
+      h1 { font-size: 26px; letter-spacing: -.02em; margin: 0 0 4px; }
+      .sub { color: var(--soft); margin: 0 0 24px; font-size: 14px; }
+      h2 { font-size: 18px; margin: 38px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+      h2 .num { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 8px; }
+      p { margin: 10px 0; }
+      code { background: var(--panel2); padding: 1px 6px; border-radius: 6px; font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .lead { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+        border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+      .lead b { color: var(--accent); }
+      .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; font-size: 13px; }
+      .legend span { display: inline-flex; align-items: center; gap: 7px; color: var(--soft); }
+      .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+      figure { margin: 8px 0 0; }
+      svg { width: 100%; height: auto; display: block; }
+      figcaption { color: var(--soft); font-size: 12.5px; text-align: center; margin-top: 8px; }
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+      th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--soft); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+      td code { white-space: nowrap; }
+      .role { font-weight: 700; }
+      details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+        padding: 4px 16px; margin: 10px 0; box-shadow: var(--shadow); }
+      summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
+      details ol { margin: 4px 0 14px; padding-left: 20px; }
+      details li { margin: 7px 0; }
+      .pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line);
+        color: var(--soft); margin-left: 6px; }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+      .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+      .box h3 { margin: 0 0 6px; font-size: 14px; }
+      .box.brain { border-top: 3px solid var(--brain); }
+      .box.hands { border-top: 3px solid var(--hands); }
+      .box.browser { border-top: 3px solid var(--browser); }
+      .box.iso { border-top: 3px solid var(--danger); }
+      footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line);
+        color: var(--soft); font-size: 12.5px; }
+      footer a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Render 本地桌面端架构</h1>
+      <p class="sub">现状快照 · 基于 <code>apps/desktop/src/main/index.ts</code> 实际接线 · 2026-06-24</p>
+
+      <div class="lead">
+        一句话心智模型：<b>Render 自己就是浏览器</b>。Electron 主进程是"可信的手的总线"，
+        托管一个窗口 —— 底层是 chrome 渲染器（标签栏 / 地址栏 / 右侧 agent 面板 / 底部浮动输入），
+        上面叠真实的网页 <code>WebContentsView</code>。
+        <b>大脑</b>是跑在独立沙箱里的 codex；<b>手</b>是 CDP human-hand 驱动真实标签页；
+        opencli 的 cookie/浏览器适配器经 bridge 在 <b>Render 自己的 Chromium</b> 里跑 ——
+        登录、抓取、生成页面全程不碰系统 Chrome。
+      </div>
+
+      <div class="legend">
+        <span><i style="background:var(--brain)"></i>大脑 Brain（推理 / codex）</span>
+        <span><i style="background:var(--hands)"></i>手 Hands（CDP 驱动）</span>
+        <span><i style="background:var(--browser)"></i>浏览器 Browser（Render 自身 + 会话）</span>
+        <span><i style="background:var(--danger)"></i>隔离面 Isolated（Tier-2 阅后即焚）</span>
+      </div>
+
+      <!-- ─────────────── architecture diagram ─────────────── -->
+      <figure>
+        <svg viewBox="0 0 980 600" role="img" aria-label="Render 桌面端架构图">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--soft)" />
+            </marker>
+            <style>
+              .blk { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+              .band { fill: var(--panel2); opacity: .5; rx: 16; }
+              .t { fill: var(--ink); font: 600 13px -apple-system, "PingFang SC", sans-serif; }
+              .tt { fill: var(--soft); font: 11px ui-monospace, Menlo, monospace; }
+              .lab { fill: var(--soft); font: 600 11px -apple-system, sans-serif; letter-spacing: .04em; }
+              .flow { stroke: var(--soft); stroke-width: 1.6; fill: none; marker-end: url(#arr); }
+              .flowd { stroke: var(--soft); stroke-width: 1.6; fill: none; marker-end: url(#arr); stroke-dasharray: 4 4; }
+              .fl { fill: var(--soft); font: 10px -apple-system, sans-serif; }
+              .ac-brain { stroke: var(--brain); } .top-brain { fill: var(--brain); }
+              .ac-hands { stroke: var(--hands); } .top-hands { fill: var(--hands); }
+              .ac-browser { stroke: var(--browser); } .top-browser { fill: var(--browser); }
+              .ac-iso { stroke: var(--danger); } .top-iso { fill: var(--danger); }
+            </style>
+          </defs>
+
+          <!-- BAND 1: the window -->
+          <rect class="band" x="14" y="14" width="952" height="150" rx="16" />
+          <text class="lab" x="30" y="34">BROWSERWINDOW · 一个原生窗口</text>
+
+          <!-- chrome renderer -->
+          <rect class="blk" x="30" y="46" width="250" height="104" rx="10" />
+          <rect x="30" y="46" width="250" height="4" rx="2" class="top-browser" />
+          <text class="t" x="46" y="72">Chrome 渲染器（SPA · 不可信）</text>
+          <text class="tt" x="46" y="92">TabStrip · Omnibox</text>
+          <text class="tt" x="46" y="108">AgentPanel · FloatingInput</text>
+          <text class="tt" x="46" y="132">→ preload/index.ts contextBridge</text>
+
+          <!-- page views -->
+          <rect class="blk" x="296" y="46" width="310" height="104" rx="10" />
+          <rect x="296" y="46" width="310" height="4" rx="2" class="top-browser" />
+          <text class="t" x="312" y="72">网页 WebContentsViews</text>
+          <text class="tt" x="312" y="92">真实浏览标签（叠在内容区）</text>
+          <text class="tt" x="312" y="112">会话 partition = persist:render</text>
+          <text class="tt" x="312" y="132" fill="var(--browser)">↑ 用户登录态就活在这里</text>
+
+          <!-- artifact views -->
+          <rect class="blk" x="622" y="46" width="328" height="104" rx="10" />
+          <rect x="622" y="46" width="328" height="4" rx="2" class="top-iso" />
+          <text class="t" x="638" y="72">Tier-2 Artifact 标签</text>
+          <text class="tt" x="638" y="92">partition = artifact:&lt;id&gt; · 临时</text>
+          <text class="tt" x="638" y="112">CSP 无网络 · artifact-preload</text>
+          <text class="tt" x="638" y="132" fill="var(--danger)">window.renderArtifact 唯一出口</text>
+
+          <!-- BAND 2: main process -->
+          <rect class="band" x="14" y="184" width="952" height="190" rx="16" />
+          <text class="lab" x="30" y="204">MAIN PROCESS · 可信的"手的总线"（Node）</text>
+
+          <rect class="blk" x="30" y="216" width="180" height="64" rx="10" />
+          <text class="t" x="44" y="242">IPC Broker</text>
+          <text class="tt" x="44" y="262">ipc.ts · registerIpc</text>
+
+          <rect class="blk" x="226" y="216" width="190" height="64" rx="10" />
+          <rect x="226" y="216" width="190" height="4" rx="2" class="top-browser" />
+          <text class="t" x="240" y="242">TabManager</text>
+          <text class="tt" x="240" y="262">tabs.ts · 会话分组 · 布局</text>
+
+          <rect class="blk" x="432" y="216" width="220" height="64" rx="10" />
+          <rect x="432" y="216" width="220" height="4" rx="2" class="top-brain" />
+          <text class="t" x="446" y="242">Agent Runtime</text>
+          <text class="tt" x="446" y="262">agent-runtime.ts · 会话主</text>
+
+          <rect class="blk" x="668" y="216" width="282" height="64" rx="10" />
+          <rect x="668" y="216" width="282" height="4" rx="2" class="top-hands" />
+          <text class="t" x="682" y="242">CDP Human-Hand</text>
+          <text class="tt" x="682" y="262">@render/cdp-human-hand · 驱动标签</text>
+
+          <rect class="blk" x="30" y="296" width="280" height="62" rx="10" />
+          <rect x="30" y="296" width="280" height="4" rx="2" class="top-brain" />
+          <text class="t" x="44" y="322">Codex Provider + Egress Proxy</text>
+          <text class="tt" x="44" y="342">codex-provider · 物化 CODEX_HOME · 藏 key</text>
+
+          <rect class="blk" x="326" y="296" width="300" height="62" rx="10" />
+          <rect x="326" y="296" width="300" height="4" rx="2" class="top-hands" />
+          <text class="t" x="340" y="322">Artifact 能力闸</text>
+          <text class="tt" x="340" y="342">allowlist + consent · runArtifactOpencli</text>
+
+          <rect class="blk" x="642" y="296" width="308" height="62" rx="10" />
+          <rect x="642" y="296" width="308" height="4" rx="2" class="top-browser" />
+          <text class="t" x="656" y="322">Render 自身 CDP 端点</text>
+          <text class="tt" x="656" y="342">cdp-port.ts · loopback 调试端口</text>
+
+          <!-- BAND 3: outside processes -->
+          <rect class="band" x="14" y="394" width="952" height="186" rx="16" />
+          <text class="lab" x="30" y="414">外部进程 / 沙箱 / Chromium</text>
+
+          <rect class="blk" x="30" y="426" width="270" height="130" rx="10" />
+          <rect x="30" y="426" width="270" height="4" rx="2" class="top-brain" />
+          <text class="t" x="44" y="452">codex app-server</text>
+          <text class="tt" x="44" y="472">沙箱 B（@render/sandbox）</text>
+          <text class="tt" x="44" y="490">local-seatbelt（默认）/ e2b</text>
+          <text class="tt" x="44" y="514">工具：render-open · render-artifact</text>
+          <text class="tt" x="44" y="532">· opencli &lt;site&gt; &lt;cmd&gt;</text>
+
+          <rect class="blk" x="316" y="426" width="290" height="130" rx="10" />
+          <rect x="316" y="426" width="290" height="4" rx="2" class="top-hands" />
+          <text class="t" x="330" y="452">opencli Router + Bridge</text>
+          <text class="tt" x="330" y="472">@render/opencli-router · -bridge</text>
+          <text class="tt" x="330" y="492">公开/API 适配器 → 沙箱 A</text>
+          <text class="tt" x="330" y="512">cookie/浏览器适配器 → /ext</text>
+          <text class="tt" x="330" y="532">profile = render（默认绑定）</text>
+
+          <rect class="blk" x="622" y="426" width="328" height="130" rx="10" />
+          <rect x="622" y="426" width="328" height="4" rx="2" class="top-browser" />
+          <text class="t" x="636" y="452">Render 的嵌入式 Chromium</text>
+          <text class="tt" x="636" y="472">opencli /ext 在这里开真实标签</text>
+          <text class="tt" x="636" y="492">&lt;site&gt; login → 可见标签，用户扫码</text>
+          <text class="tt" x="636" y="512">cookie 落在 persist:render</text>
+          <text class="tt" x="636" y="532" fill="var(--browser)">→ agent 后续命令即已登录</text>
+
+          <!-- flows -->
+          <!-- renderer <-> broker -->
+          <path class="flow ac-browser" d="M120 150 L120 216" /><text class="fl" x="126" y="186">prompt / IPC</text>
+          <path class="flow" d="M150 216 L150 150" />
+          <!-- broker <-> agent runtime -->
+          <path class="flow ac-brain" d="M210 248 L432 248" /><text class="fl" x="250" y="240">submitPrompt</text>
+          <path class="flowd ac-brain" d="M432 264 L210 264" /><text class="fl" x="250" y="278">AgentEvents</text>
+          <!-- agent runtime -> codex -->
+          <path class="flow ac-brain" d="M520 280 L300 426" />
+          <!-- codex tool -> broker (render-open/artifact parsed) -->
+          <!-- agent -> tabmanager (open tab / artifact) -->
+          <path class="flow ac-browser" d="M470 280 L370 296" />
+          <!-- router/bridge -> render chromium -->
+          <path class="flow ac-hands" d="M606 490 L622 490" />
+          <!-- human-hand -> render cdp endpoint -> chromium -->
+          <path class="flow ac-browser" d="M800 280 L800 426" /><text class="fl" x="806" y="360">CDP</text>
+          <!-- artifact view -> capability gate -->
+          <path class="flow ac-iso" d="M740 150 L600 296" /><text class="fl" x="650" y="210">opencli()</text>
+          <!-- gate -> router -->
+          <path class="flow ac-hands" d="M470 358 L460 426" />
+          <!-- page view shares persist:render with chromium (concept) -->
+          <path class="flowd ac-browser" d="M450 150 L786 426" /><text class="fl" x="600" y="300">同享 persist:render</text>
+        </svg>
+        <figcaption>实线 = 调用 / 数据；虚线 = 事件流或会话共享。颜色对应大脑 / 手 / 浏览器 / 隔离面四类角色。</figcaption>
+      </figure>
+
+      <!-- ─────────────── module table ─────────────── -->
+      <h2><span class="num">1</span>主进程模块 → 职责</h2>
+      <table>
+        <thead><tr><th>模块</th><th>角色</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td><code>tabs.ts</code></td><td class="role" style="color:var(--browser)">浏览器</td>
+            <td>拥有窗口与 <code>WebContentsView</code>；布局内插；标签分组（<code>conversation-groups.ts</code>）；<code>createArtifact()</code> 起隔离 Tier-2 标签；持有 <code>persist:render</code> 会话。</td></tr>
+          <tr><td><code>ipc.ts</code></td><td class="role">总线</td>
+            <td><code>registerIpc</code> 桥接渲染器↔主进程；<code>emitAgent / emitTabs</code>；处理 <code>artifactOpencli</code>（先过能力闸再跑）。</td></tr>
+          <tr><td><code>agent-runtime.ts</code></td><td class="role" style="color:var(--brain)">大脑</td>
+            <td>启动并喂养沙箱里的 codex app-server；解析 <code>render-open</code> / <code>render-artifact</code> sentinel；发 AgentEvent；<b>会话主</b>（分配 tab group + 新 codex 线程同步）；artifact 能力闸（allowlist/consent，原型期放行）。</td></tr>
+          <tr><td><code>cdp-human-hand</code> <span class="pill">pkg</span></td><td class="role" style="color:var(--hands)">手</td>
+            <td>通过 CDP 驱动真实标签页（点击 / 输入 / 导航 / 截图）。本地接 Render 自身 Chromium，远端经 relay。</td></tr>
+          <tr><td><code>opencli-router</code> <span class="pill">pkg</span></td><td class="role" style="color:var(--hands)">手</td>
+            <td>跑 opencli 适配器：公开/API 类在沙箱里；cookie/浏览器类经 CDP relay 打到登录态 Chromium。</td></tr>
+          <tr><td><code>opencli-bridge-wire.ts</code></td><td class="role" style="color:var(--browser)">浏览器</td>
+            <td>把 opencli 的 <code>/ext</code> 浏览器后端服务在 <b>Render 自己的 Chromium</b>；按当前会话组铸造<b>真实可见</b>标签；<code>&lt;site&gt; login</code> 的 cookie 落在 <code>persist:render</code>。默认绑定为 daemon 默认 profile。</td></tr>
+          <tr><td><code>codex-provider.ts</code><br /><code>codex-egress-proxy.ts</code></td><td class="role" style="color:var(--brain)">大脑</td>
+            <td>Render 自管 model-provider 配置 + 凭据；从设置物化 <code>CODEX_HOME</code>（不抄用户 ~/.codex）；egress 代理让大脑<b>看不到 key</b>。</td></tr>
+          <tr><td><code>cdp-port.ts</code></td><td class="role" style="color:var(--browser)">浏览器</td>
+            <td><code>enableRenderCdp</code> 在 app 启动前开 loopback 调试端口，使 <code>opencli render &lt;cmd&gt;</code> 驱动 Render 自身 Chromium。</td></tr>
+          <tr><td><code>artifact-opencli.ts</code><br /><code>artifact-capability.ts</code><br /><code>artifact-session.ts</code></td><td class="role" style="color:var(--danger)">隔离面</td>
+            <td>Tier-2 桥的运行器（<code>buildArgv</code>：位置参数在前、<code>--flag</code> 在后、<code>-f json</code>）、能力闸（allowlist+consent）、隔离会话 + 无网 CSP。</td></tr>
+          <tr><td><code>sandbox</code> <span class="pill">pkg</span></td><td class="role">基座</td>
+            <td><code>selectSandbox()</code>：<code>local-seatbelt</code>（默认、无密钥）或 <code>e2b</code>（远端）。大脑与 opencli 各跑在沙箱里。</td></tr>
+        </tbody>
+      </table>
+
+      <!-- ─────────────── flows ─────────────── -->
+      <h2><span class="num">2</span>三条关键数据流</h2>
+
+      <details open>
+        <summary>① 一次普通提问（文字 → UI 回答）</summary>
+        <ol>
+          <li>用户在浮动输入里发 prompt → 渲染器经 preload <code>contextBridge</code> → IPC <code>submitPrompt</code>。</li>
+          <li>Agent Runtime 投给沙箱里的 codex app-server，开 <code>turn_started</code>。</li>
+          <li>codex 推理，按需调工具（opencli 搜索 / <code>render-open</code> / <code>render-artifact</code>）。</li>
+          <li>结果以 <code>AgentEvent</code> 流回：<code>item / delta / reasoning / ux(render·form·confirm·login) / artifact / turn_completed</code>。</li>
+          <li>渲染器把 <code>ux:render</code> 的 json-render spec 画成真实 UI（不是纯聊天文本）。</li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>② 登录某站并抓取（cookie/浏览器适配器）</summary>
+        <ol>
+          <li>agent 跑 <code>opencli &lt;site&gt; login --site-session persistent</code>。</li>
+          <li>opencli daemon 的 <code>/ext</code> 后端由 bridge 服务 → 在 Render 自身 Chromium 里铸造一个<b>真实可见</b>标签（落入当前会话组）。</li>
+          <li>用户在该标签里扫码 / 输密码 —— 大脑全程看不到凭据；cookie 落 <code>persist:render</code>。</li>
+          <li>用 <code>whoami --site-session persistent</code> 验证（不信 login 退出码；校验漂移按已登录处理）。</li>
+          <li>后续 <code>search/read</code>（同 persistent 会话）即已认证，数据流回成卡片。<b>从不碰系统 Chrome。</b></li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>③ Tier-2 生成式页面调后端（artifact → opencli）</summary>
+        <ol>
+          <li>agent 写自包含 HTML，跑 <code>render-artifact app.html --opencli "&lt;site&gt; &lt;cmd&gt;,…"</code>。</li>
+          <li>Runtime 解析 sentinel → <code>tabs.createArtifact()</code> 在隔离 <code>artifact:&lt;id&gt;</code> 分区起标签（无网 CSP + artifact-preload）。</li>
+          <li>页面调 <code>window.renderArtifact.opencli(site, cmd, positional, args)</code> → IPC <code>artifactOpencli</code>。</li>
+          <li>能力闸校验 allowlist + consent（原型期放行）→ <code>runArtifactOpencli</code> 用 <code>buildArgv</code>（位置参数在前）跑到 bridge profile。</li>
+          <li>读到用户登录态站点的真实数据，<code>-f json</code> 解析后回到页面渲染。页面阅后即焚。</li>
+        </ol>
+      </details>
+
+      <!-- ─────────────── security ─────────────── -->
+      <h2><span class="num">3</span>信任边界（为什么这样切）</h2>
+      <div class="grid2">
+        <div class="box browser"><h3>渲染器：不可信展示面</h3>
+          <code>sandbox:true</code> + <code>contextIsolation</code>，只能经 preload 桥说话；任何顶层导航离开 chrome origin 都被拦成新标签 —— 面板里的链接<b>永远</b>替换不了应用 UI。</div>
+        <div class="box brain"><h3>大脑：沙箱里的 codex</h3>
+          跑在独立沙箱；经 egress 代理上网，<b>看不到 API key</b>；看不到用户 cookie（cookie 在主进程 Chromium 的 <code>persist:render</code>，opencli 经 CDP 只取数据不取凭据）。</div>
+        <div class="box browser"><h3>浏览器：Render 自身 + 会话</h3>
+          所有登录/浏览/生成都在 Render 自己的 Chromium；<code>persist:render</code> 持用户登录态（设备本地）。<b>绝不跳系统 Chrome。</b></div>
+        <div class="box iso"><h3>隔离面：Tier-2 最严</h3>
+          临时 <code>artifact:&lt;id&gt;</code> 分区（绝不用 persist:render）+ 无网 CSP，唯一出口是窄能力 <code>renderArtifact</code>（allowlist + consent）。关标签即销毁。</div>
+      </div>
+
+      <footer>
+        来源：<code>apps/desktop/src/main/index.ts</code>（接线）、<code>main/*.ts</code>、<code>packages/{cdp-human-hand,opencli-router,opencli-bridge,sandbox,protocol}</code>。
+        关联文档：<code>docs/render-master-plan.html</code>（锁定决策 + 路线图）。
+        生成于 Render 项目 · 2026-06-24。
+      </footer>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Render 门户</title>
+    <!--
+      Render 门户 — opencli 内核驱动的定制主页(hao123 式)。
+      由 `opencli ux serve --html portal.html --allow "<读命令>"` 服务在 127.0.0.1。
+      取数契约:fetch('/ux/config') 拿一次性 token,再 POST /ux/data
+      {site,command,positional,args} 带 header x-ux-token。CSP 由 ux server 注入
+      (connect-src 'self' → 页面只能打 /ux/data,无法外联泄数)。
+    -->
+    <style>
+      :root{
+        --bg:#f4f6fa; --card:#fff; --ink:#141821; --soft:#697384; --line:#e4e8ef;
+        --accent:#3b6cff; --accent-ink:#fff; --chip:#eef1f7; --shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.06);
+        --good:#1a8f54; --warn:#c9620a; --radius:16px;
+      }
+      @media (prefers-color-scheme:dark){:root{
+        --bg:#0b0d11; --card:#14171d; --ink:#eef1f6; --soft:#9aa4b3; --line:#252b34;
+        --accent:#5e86ff; --chip:#1b1f27; --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+        --good:#43d089; --warn:#f0a35a;}}
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--bg);color:var(--ink);
+        font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+      a{color:inherit;text-decoration:none}
+      .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 70px}
+
+      /* ── header + search ── */
+      header{text-align:center;margin:14px 0 22px}
+      .logo{font-size:30px;font-weight:800;letter-spacing:-.02em}
+      .logo b{color:var(--accent)}
+      .tagline{color:var(--soft);font-size:13px;margin-top:2px}
+      .searchbar{display:flex;gap:8px;max-width:680px;margin:20px auto 0}
+      .searchbar input{flex:1;min-width:0;background:var(--card);border:1.5px solid var(--line);border-radius:999px;
+        padding:13px 20px;font-size:16px;color:var(--ink);box-shadow:var(--shadow)}
+      .searchbar input:focus{outline:none;border-color:var(--accent)}
+      .searchbar button{border:0;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:700;
+        padding:0 26px;font-size:15px;cursor:pointer}
+      .quicklinks{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:14px auto 0;max-width:760px}
+      .quicklinks a{font-size:13px;color:var(--soft);background:var(--chip);padding:6px 13px;border-radius:999px}
+      .quicklinks a:hover{color:var(--ink)}
+
+      /* ── carousel ── */
+      .discover{margin:26px 0 8px;background:linear-gradient(120deg,color-mix(in srgb,var(--accent) 12%,transparent),transparent);
+        border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;display:flex;align-items:center;gap:16px;min-height:64px}
+      .discover .lbl{font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap;letter-spacing:.04em}
+      .discover .slot{flex:1;min-width:0}
+      .discover .dname{font-weight:700}.discover .dname code{font-size:12px;color:var(--soft)}
+      .discover .ddesc{font-size:13px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .discover .dots{display:flex;gap:5px}.discover .dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}
+      .discover .dots i.on{background:var(--accent)}
+
+      /* ── widget grid ── */
+      .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:18px}
+      .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+        display:flex;flex-direction:column;overflow:hidden;min-height:240px}
+      .card h2{font-size:15px;margin:0;padding:14px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+      .card h2 .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:#fff;font-size:12px;font-weight:800;flex:0 0 auto}
+      .card h2 .sp{flex:1}
+      .card h2 .src{font:11px ui-monospace,Menlo,monospace;color:var(--soft);font-weight:400}
+      .list{padding:4px 0;overflow:auto;flex:1}
+      .row{display:flex;gap:10px;padding:9px 16px;align-items:baseline;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+      .row:last-child{border-bottom:0}
+      .row .rk{color:var(--soft);font:700 12px ui-monospace,monospace;min-width:18px;text-align:center}
+      .row .rk.top{color:var(--accent)}
+      .row .tl{flex:1;min-width:0;font-size:13.5px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+      .row .ex{font:600 12.5px ui-monospace,monospace;white-space:nowrap}
+      .row .ex.up{color:var(--good)}.row .ex.dn{color:#d6455d}
+      .row .sub{color:var(--soft);font-size:12px}
+      .state{padding:22px 16px;color:var(--soft);font-size:13px;text-align:center}
+      .state.err{color:var(--warn)}
+      .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--soft);border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
+      @keyframes s{to{transform:rotate(360deg)}}
+      .wx{padding:16px}.wx .big{font-size:34px;font-weight:800}.wx .cond{color:var(--soft);font-size:13px;margin-top:2px}
+      .wx .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;font-size:13px}
+      .wx .grid2 div{background:var(--chip);border-radius:8px;padding:7px 10px}
+      .wx input{width:120px;background:var(--chip);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:5px 9px;font:inherit;font-size:13px}
+      /* search results overlay */
+      #results{margin-top:18px;display:none}
+      #results.on{display:block}
+      footer{margin-top:34px;text-align:center;color:var(--soft);font-size:12px}
+      footer code{font-size:11px}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="logo">Render <b>门户</b></div>
+        <div class="tagline">opencli 内核驱动 · 数据实时拉取 · 运行在本地隔离 origin</div>
+        <form class="searchbar" id="searchForm">
+          <input id="q" type="text" placeholder="全网聚合搜索（agg）— 试试 “codex” / “火锅” / “电动车”…" autocomplete="off" />
+          <button type="submit">搜索</button>
+        </form>
+        <nav class="quicklinks" id="quicklinks"></nav>
+      </header>
+
+      <section class="discover" aria-label="发现新适配器">
+        <span class="lbl">🧪 尝鲜适配器</span>
+        <div class="slot">
+          <div class="dname" id="dName">—</div>
+          <div class="ddesc" id="dDesc">opencli 现有 165 个站点适配器,轮播推荐</div>
+        </div>
+        <div class="dots" id="dDots"></div>
+      </section>
+
+      <section id="results"></section>
+
+      <section class="grid" id="grid"></section>
+
+      <footer>
+        Render Tier-2 门户 · 后端 opencli(profile=render)· <code>ux serve</code> + <code>/ux/data</code>(只读·FIFO·token+CSP)
+      </footer>
+    </div>
+
+    <script>
+      'use strict';
+      // ── /ux contract ──────────────────────────────────────────────
+      let CFG = null;
+      async function boot() {
+        try { CFG = await (await fetch('/ux/config')).json(); } catch { CFG = {}; }
+        renderQuicklinks(); startCarousel(); mountWidgets();
+      }
+      async function data(site, command, positional, args) {
+        if (!CFG || !CFG.token) return { ok: false, error: '未连接 ux server', code: 'no_token' };
+        try {
+          const r = await fetch('/ux/data', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-ux-token': CFG.token },
+            body: JSON.stringify({ site, command, positional, args }),
+          });
+          return await r.json();
+        } catch (e) { return { ok: false, error: String(e.message || e), code: 'fetch' }; }
+      }
+      const rows = (d) => (Array.isArray(d) ? d : (d && (d.rows || d.items || d.data)) || (d ? [d] : []));
+      const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const el = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstElementChild; };
+
+      // ── quicklinks (hao123 flavor) ────────────────────────────────
+      const LINKS = [['B站','https://bilibili.com'],['知乎','https://zhihu.com'],['微博','https://weibo.com'],
+        ['GitHub','https://github.com'],['arXiv','https://arxiv.org'],['淘宝','https://taobao.com'],
+        ['京东','https://jd.com'],['大众点评','https://dianping.com'],['携程','https://ctrip.com'],['小红书','https://xiaohongshu.com']];
+      function renderQuicklinks() {
+        const n = document.getElementById('quicklinks');
+        for (const [t, u] of LINKS) n.append(el(`<a href="${u}" target="_blank" rel="noreferrer">${t}</a>`));
+      }
+
+      // ── 尝鲜 carousel (real catalog, embedded) ────────────────────
+      const DISCOVER = [
+        ['reddit frontpage','Reddit 全站热门 / r/all'],['bloomberg markets','彭博市场要闻'],
+        ['hackernews / web read','任意网页转 Markdown(web read &lt;url&gt;)'],['steam app','Steam 游戏商店详情'],
+        ['homebrew popular','最常安装的 Homebrew 包'],['pubmed review','PubMed 医学综述检索'],
+        ['12306 trains','两站之间的火车班次(匿名)'],['douban reviews','导出个人豆瓣影评'],
+        ['apple-podcasts top','Apple 播客排行榜'],['flathub search','Linux Flatpak 应用搜索'],
+        ['oeis sequence','整数数列百科(OEIS)'],['binance gainers','24h 涨幅榜'],
+        ['xiaohongshu search','小红书种草笔记'],['weread book','微信读书书籍详情'],
+        ['tiktok explore','TikTok 推荐流'],['npm package','npm 包元数据'],
+      ];
+      function startCarousel() {
+        const name = document.getElementById('dName'), desc = document.getElementById('dDesc'), dots = document.getElementById('dDots');
+        for (let i = 0; i < DISCOVER.length; i++) dots.append(el('<i></i>'));
+        let i = 0;
+        const tick = () => {
+          const [n, d] = DISCOVER[i];
+          name.innerHTML = `<code>opencli ${esc(n)}</code>`;
+          desc.innerHTML = esc(d).replace('&amp;lt;', '&lt;').replace('&amp;gt;', '&gt;');
+          [...dots.children].forEach((x, k) => x.classList.toggle('on', k === i));
+          i = (i + 1) % DISCOVER.length;
+        };
+        tick(); setInterval(tick, 3200);
+      }
+
+      // ── widgets ───────────────────────────────────────────────────
+      const WIDGETS = [
+        { key: 'bilibili', title: 'B站排行', color: '#fb7299', src: 'bilibili ranking',
+          load: () => data('bilibili', 'ranking', [], { limit: 8 }),
+          render: (d) => listHtml(rows(d), (r, i) => `<div class="row"><span class="rk ${i<3?'top':''}">${i+1}</span><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}</a><span class="sub">${esc(r.author||'')}</span></div>`) },
+        { key: '36kr', title: '36氪 · 快讯', color: '#0d80fa', src: '36kr news',
+          load: () => data('36kr', 'news', [], { limit: 8 }),
+          render: (d) => listHtml(rows(d), (r, i) => `<div class="row"><span class="rk">${i+1}</span><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}</a></div>`) },
+        { key: 'arxiv', title: 'arXiv · cs.AI', color: '#b31b1b', src: 'arxiv recent',
+          load: () => data('arxiv', 'recent', ['cs.AI'], { limit: 8 }),
+          render: (d) => listHtml(rows(d), (r) => `<div class="row"><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}</a><span class="sub">${esc((r.authors||'').split(',')[0]||'')}</span></div>`) },
+        { key: 'binance', title: '币价 · Top', color: '#f0b90b', src: 'binance top',
+          load: () => data('binance', 'top', [], { limit: 8 }),
+          render: (d) => listHtml(rows(d), (r, i) => { const ch = Number(r.change_24h ?? r.change_pct ?? 0); return `<div class="row"><span class="rk">${i+1}</span><span class="tl">${esc(r.symbol)}</span><span class="ex ${ch>=0?'up':'dn'}">${ch>=0?'+':''}${ch.toFixed?ch.toFixed(2):ch}%</span><span class="sub">${esc(r.price)}</span></div>`; }) },
+        { key: 'wttr', title: '天气', color: '#3aa0ff', src: 'wttr current',
+          render: () => null /* custom mount below */ },
+      ];
+      function listHtml(rs, row) {
+        if (!rs.length) return `<div class="state">无数据</div>`;
+        return `<div class="list">${rs.map(row).join('')}</div>`;
+      }
+      function card(w) {
+        return el(`<article class="card" id="w-${w.key}">
+          <h2><span class="ic" style="background:${w.color}">${esc(w.title[0])}</span><span class="sp">${esc(w.title)}</span><span class="src">${esc(w.src)}</span></h2>
+          <div class="body"><div class="state"><span class="spin"></span>加载中…</div></div>
+        </article>`);
+      }
+      async function loadWidget(w) {
+        const body = document.querySelector(`#w-${w.key} .body`);
+        try {
+          const res = await w.load();
+          if (!res.ok) throw new Error(res.error || res.code || '失败');
+          body.innerHTML = w.render(res.data) || '<div class="state">—</div>';
+        } catch (e) { body.innerHTML = `<div class="state err">⚠ ${esc(e.message)}</div>`; }
+      }
+      function mountWidgets() {
+        const grid = document.getElementById('grid');
+        for (const w of WIDGETS) grid.append(card(w));
+        // weather: custom interactive card (location input)
+        mountWeather();
+        // load the data-driven ones (skip wttr, handled by mountWeather)
+        WIDGETS.filter((w) => w.key !== 'wttr').forEach(loadWidget);
+      }
+
+      // ── weather widget (interactive location) ─────────────────────
+      async function mountWeather() {
+        const body = document.querySelector('#w-wttr .body');
+        body.innerHTML = `<div class="wx"><div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <input id="wxLoc" value="Shanghai" /><button id="wxGo" style="border:0;border-radius:8px;background:var(--chip);color:var(--ink);padding:6px 12px;cursor:pointer;font:inherit;font-size:13px">查</button></div>
+          <div id="wxOut"><div class="state"><span class="spin"></span>加载中…</div></div></div>`;
+        const run = async () => {
+          const loc = document.getElementById('wxLoc').value.trim() || 'Shanghai';
+          const out = document.getElementById('wxOut');
+          out.innerHTML = `<div class="state"><span class="spin"></span>加载中…</div>`;
+          const res = await data('wttr', 'current', [loc], {});
+          if (!res.ok) { out.innerHTML = `<div class="state err">⚠ ${esc(res.error || res.code)}</div>`; return; }
+          const r = rows(res.data)[0] || {};
+          const temp = r.temperature ?? r.temp_C ?? r.tempC ?? r.temperatureC ?? r.feelsLike ?? '—';
+          const cond = r.condition ?? r.weatherDesc ?? r.description ?? r.summary ?? '';
+          out.innerHTML = `<div class="big">${esc(temp)}${String(temp).match(/\d$/)?'°':''}</div><div class="cond">${esc(r.location||loc)} · ${esc(cond)}</div>
+            <div class="grid2">${Object.entries(r).filter(([k])=>/humid|wind|feel|uv|pressure|visib/i.test(k)).slice(0,4).map(([k,v])=>`<div>${esc(k)}: ${esc(v)}</div>`).join('')||''}</div>`;
+        };
+        document.getElementById('wxGo').onclick = run;
+        document.getElementById('wxLoc').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+        run();
+      }
+
+      // ── agg search ────────────────────────────────────────────────
+      document.getElementById('searchForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const q = document.getElementById('q').value.trim(); if (!q) return;
+        const box = document.getElementById('results'); box.className = 'on';
+        box.innerHTML = `<article class="card"><h2><span class="ic" style="background:var(--accent)">⌕</span><span class="sp">全网搜索：${esc(q)}</span><span class="src">agg search</span></h2><div class="state"><span class="spin"></span>聚合多平台中…</div></article>`;
+        const res = await data('agg', 'search', [q], { limit: 14 });
+        const card = box.firstElementChild;
+        if (!res.ok) { card.querySelector('.state').className = 'state err'; card.querySelector('.state').textContent = '⚠ ' + (res.error || res.code); return; }
+        const rs = rows(res.data);
+        card.innerHTML = `<h2><span class="ic" style="background:var(--accent)">⌕</span><span class="sp">全网搜索：${esc(q)}</span><span class="src">agg · ${rs.length} 条</span></h2>` +
+          (rs.length ? `<div class="list">${rs.map((r)=>`<div class="row"><span class="sub" style="min-width:64px">${esc(r.source||'')}</span><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}<br><span class="sub">${esc((r.snippet||'').slice(0,80))}</span></a></div>`).join('')}</div>` : `<div class="state">无结果</div>`);
+      });
+
+      boot();
+    </script>
+  </body>
+</html>

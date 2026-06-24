@@ -20,6 +20,7 @@ import { enableRenderCdp } from './cdp-port.js';
 import { registerRenderOpencliApp } from './opencli-render-app.js';
 import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
 import { createCodexProvider } from './codex-provider.js';
+import { startHomePortal } from './home-portal.js';
 
 // electron-vite emits this module as CommonJS, so `__dirname` is available.
 
@@ -51,12 +52,19 @@ function createWindow(): BrowserWindow {
 }
 
 function wire(win: BrowserWindow): void {
+  // Render's home page is an opencli-served portal (started below, once the bridge
+  // profile is known). Declared first so TabManager's homeUrl getter can read it
+  // lazily — a tab created before the portal is up falls back to blank.
+  let homePortal: ReturnType<typeof startHomePortal> | null = null;
+
   const tabs = new TabManager({
     window: win,
     onChange: (snapshot) => broker.emitTabs(snapshot),
     // the artifact-preload exposes window.renderArtifact ONLY to Tier-2 tabs.
     // electron-vite emits it next to the main preload (preload/artifact.js).
     artifactPreload: join(__dirname, '../preload/artifact.js'),
+    // default new-tab / home URL = the opencli portal (read lazily at create time).
+    homeUrl: () => homePortal?.url ?? null,
   });
 
   const humanHand = createHumanHand({
@@ -75,6 +83,11 @@ function wire(win: BrowserWindow): void {
   // the user's logged-in session) instead of system Chrome.
   const bridgeEnabled = process.env.RENDER_OPENCLI_BRIDGE !== '0';
   const bridgeProfile = bridgeEnabled ? renderBridgeProfile() : undefined;
+
+  // Start the opencli portal server (Render's home page). Its /ux/data calls route
+  // to Render's own bridge profile, so the portal's widgets read through the same
+  // logged-in session the agent uses. Best-effort: disabled cleanly if unavailable.
+  homePortal = startHomePortal(bridgeProfile ? { profile: bridgeProfile } : {});
 
   // Codex provider/auth (Phase A): Render owns model-provider config + creds.
   // When a Render credential exists, the runtime uses a CODEX_HOME materialized
@@ -167,7 +180,13 @@ function wire(win: BrowserWindow): void {
 
   // open the first (blank) browsing tab once the chrome is ready
   win.webContents.once('did-finish-load', () => {
-    if (tabs.activeTabId === null) tabs.create();
+    // Open the first tab on the opencli portal once its server announces a URL
+    // (a second or two). If the portal is disabled/never starts, open blank.
+    if (tabs.activeTabId === null) {
+      const hp = homePortal;
+      if (hp) void hp.whenReady().then(() => { if (tabs.activeTabId === null) tabs.create(); });
+      else tabs.create();
+    }
     // CDP self-test is a dev diagnostic (opens example.com) — off by default.
     if (process.env.RENDER_DEBUG_CDP) void runCdpSelfTest(humanHand, tabs);
   });
@@ -180,6 +199,7 @@ function wire(win: BrowserWindow): void {
     void humanHand.dispose();
     void opencliBridge?.dispose();
     void codexProvider.dispose();
+    homePortal?.dispose();
   });
 }
 
