@@ -219,11 +219,22 @@ export async function installRenderArtifact(
   // $1 = html file (relative or absolute); $2.. = flags. Resolve $1 to an
   // absolute path against the cwd so the runtime can `cat` it regardless of where
   // the agent ran the command from.
+  // Parse flags HERE (where "$@" preserves each arg intact — incl. a multi-word
+  // --opencli "a b,c d"); emit a TAB-delimited sentinel so the runtime parser
+  // never has to reconstruct shell quoting (which `$*` would have flattened away).
   const script =
     `#!/bin/sh\n` +
     `f="$1"; shift\n` +
     `case "$f" in /*) abs="$f" ;; *) abs="$(pwd)/$f" ;; esac\n` +
-    `printf '${RENDER_ARTIFACT_SENTINEL} %s %s\\n' "$abs" "$*"\n`;
+    `title=""; opencli=""\n` +
+    `while [ $# -gt 0 ]; do\n` +
+    `  case "$1" in\n` +
+    `    --title) title="$2"; shift 2 ;;\n` +
+    `    --opencli) opencli="$2"; shift 2 ;;\n` +
+    `    *) shift ;;\n` +
+    `  esac\n` +
+    `done\n` +
+    `printf '${RENDER_ARTIFACT_SENTINEL}\\t%s\\t%s\\t%s\\n' "$abs" "$title" "$opencli"\n`;
   const cmd =
     `mkdir -p "${binDir}" && cat > "${binDir}/render-artifact" <<'RENDER_ARTIFACT_EOF'\n${script}RENDER_ARTIFACT_EOF\nchmod +x "${binDir}/render-artifact"`;
   try {
@@ -251,16 +262,13 @@ export function parseRenderArtifact(output: string | undefined): RenderArtifactI
   if (!output) return null;
   const line = output.split('\n').find((l) => l.includes(RENDER_ARTIFACT_SENTINEL));
   if (!line) return null;
-  const rest = line.slice(line.indexOf(RENDER_ARTIFACT_SENTINEL) + RENDER_ARTIFACT_SENTINEL.length).trim();
-  if (!rest) return null;
-  // first whitespace-delimited token is the resolved file path; the remainder
-  // is the flag tail (--title "…" --opencli "a,b").
-  const sp = rest.search(/\s/);
-  const file = (sp === -1 ? rest : rest.slice(0, sp)).trim();
+  // TAB-delimited: SENTINEL \t <abs-path> \t <title> \t <opencli-list>. The shim
+  // already parsed the flags, so values arrive intact (no quote reconstruction).
+  const parts = line.slice(line.indexOf(RENDER_ARTIFACT_SENTINEL)).split('\t');
+  const file = (parts[1] ?? '').trim();
   if (!file || !file.startsWith('/')) return null;
-  const tail = sp === -1 ? '' : rest.slice(sp + 1);
-  const title = matchFlag(tail, 'title');
-  const opencliRaw = matchFlag(tail, 'opencli');
+  const title = (parts[2] ?? '').trim() || undefined;
+  const opencliRaw = (parts[3] ?? '').trim();
   const opencli = opencliRaw
     ? [...new Set(opencliRaw.split(',').map((s) => s.trim().replace(/\s+/g, ' ')).filter(Boolean))]
     : undefined;
@@ -269,15 +277,6 @@ export function parseRenderArtifact(output: string | undefined): RenderArtifactI
     ...(title ? { title } : {}),
     ...(opencli && opencli.length ? { opencli } : {}),
   };
-}
-
-/** Pull a `--flag value` / `--flag "quoted value"` out of a collapsed flag tail. */
-function matchFlag(tail: string, flag: string): string | undefined {
-  const re = new RegExp(`--${flag}\\s+(?:"([^"]*)"|'([^']*)'|(\\S+))`);
-  const m = tail.match(re);
-  if (!m) return undefined;
-  const v = (m[1] ?? m[2] ?? m[3] ?? '').trim();
-  return v || undefined;
 }
 
 /** Extract the URL from a `render-open <url>` command (raw or zsh -lc wrapped). */
