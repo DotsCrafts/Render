@@ -54,6 +54,9 @@ function wire(win: BrowserWindow): void {
   const tabs = new TabManager({
     window: win,
     onChange: (snapshot) => broker.emitTabs(snapshot),
+    // the artifact-preload exposes window.renderArtifact ONLY to Tier-2 tabs.
+    // electron-vite emits it next to the main preload (preload/artifact.js).
+    artifactPreload: join(__dirname, '../preload/artifact.js'),
   });
 
   const humanHand = createHumanHand({
@@ -91,6 +94,10 @@ function wire(win: BrowserWindow): void {
     // the `render-open` tool: open a page in Render's OWN browser, not system Chrome.
     // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange.
     openTab: (url) => tabs.openUrl(url),
+    // the `render-artifact` tool: open a Tier-2 app in an ISOLATED ephemeral tab
+    // (own partition + no-network CSP + artifact-preload) in the active group.
+    openArtifact: (artifact, groupId) =>
+      tabs.createArtifact(artifact.content, { id: artifact.id, title: artifact.title, groupId }),
     // register each conversation's tab group (label/color) when it becomes active
     // so the strip can chip it even before the bridge mints its first tab.
     registerGroup: (group) => tabs.ensureGroup(group),
@@ -101,7 +108,16 @@ function wire(win: BrowserWindow): void {
     now: () => Date.now(),
   });
 
-  const broker = registerIpc({ chrome: win.webContents, tabs, agent, humanHand, codex: codexProvider });
+  const broker = registerIpc({
+    chrome: win.webContents,
+    tabs,
+    agent,
+    humanHand,
+    codex: codexProvider,
+    // a consented artifact read routes to Render's bridge profile (same session
+    // the agent uses) so it can read the user's logged-in sites — never system Chrome.
+    ...(bridgeProfile ? { artifactOpencliProfile: bridgeProfile } : {}),
+  });
 
   // Serve opencli's /ext browser backend from Render's OWN Chromium (default ON;
   // RENDER_OPENCLI_BRIDGE=0 disables). Cookie/browser adapters then run inside

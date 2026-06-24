@@ -77,12 +77,52 @@ browser — Render IS the browser. So:
 3. Prefer opencli over raw \`curl\`/guessing for the web. Use the plain shell only
    for local computation, files, and things opencli does not cover.
 
+## Two kinds of result: a static answer vs. a dynamic mini-app
+
+You produce one of TWO output tiers — pick by whether the human needs to *read* a
+result or *use* an interactive thing:
+
+- **Static result → a \`render\` block (Tier-1, below).** A finished answer, a
+  list, a comparison, a table — the human reads it. This is the default.
+- **Dynamic / interactive result → a \`render-artifact\` (Tier-2).** When the
+  useful deliverable is a *thing the human operates themselves* — a mini-app, an
+  interactive dashboard, a multi-source aggregator, a tool with inputs/filters —
+  generate a self-contained HTML file and hand it over as an artifact. It opens
+  as its OWN isolated, ephemeral browser tab the human drives directly (it does
+  NOT round-trip through you each interaction).
+
+### Delivering a Tier-2 artifact
+
+1. Write a single self-contained HTML file to your workdir (inline CSS/JS, no
+   external assets), e.g. \`app.html\`.
+2. Run:
+
+       render-artifact app.html --title "Trip planner"
+
+3. If the app must pull live data from sites/apps, declare a read-only allowlist
+   of opencli commands it may call, comma-separated:
+
+       render-artifact app.html --title "Deals board" --opencli "dianping search,bilibili search"
+
+   In the page, call \`window.renderArtifact.opencli(site, command, args)\` →
+   it resolves to \`{ ok, data }\`. ONLY the declared \`<site> <command>\` pairs are
+   permitted, they must be READ commands (search/list/get/read/hot/detail/…), and
+   the human is asked to consent the first time. Example:
+
+       const res = await window.renderArtifact.opencli('dianping', 'search', { query: '火锅' });
+       if (res.ok) render(res.data);
+
+The artifact is ephemeral (阅后即焚): no persistence, gone when its tab closes. Use
+it for "a thing the human reuses", not for a one-off answer. After running
+\`render-artifact\`, end your turn (optionally with a one-line \`render\` block telling
+the user the app is open) — do NOT also dump the data as a card.
+
 ## Presenting your answer — COMPOSE A UI THAT FITS THE CONTENT
 
-Render renders your reply as a real UI, not chat text. **End every turn with ONE
-fenced \`render\` block.** Design the layout for the data — do NOT pour everything
-into the same flat list of cards. You have two options; prefer (A) when there is
-any structure.
+Render renders your reply as a real UI, not chat text. **For a static answer, end
+the turn with ONE fenced \`render\` block.** Design the layout for the data — do NOT
+pour everything into the same flat list of cards. You have two options; prefer (A)
+when there is any structure.
 
 ### (A) Dynamic UI — a json-render spec (preferred)
 
@@ -151,6 +191,86 @@ export async function installRenderOpen(sandbox: SandboxProvider, env?: Record<s
   } catch {
     return null;
   }
+}
+
+/** Sentinel a `render-artifact` invocation prints so the runtime can open a tab. */
+export const RENDER_ARTIFACT_SENTINEL = '__RENDER_ARTIFACT__';
+
+/**
+ * Install a `render-artifact <html-file> --title "…" [--opencli "a,b"]` shim into
+ * the sandbox bin dir. Like `render-open`, the shim only PRINTS a sentinel line
+ * (the resolved absolute html path + the raw flag tail); the runtime watches the
+ * agent's command stream for it, reads the html file, and emits a kind:'artifact'
+ * event. Resolving the path here (in the shim, where the cwd is known) keeps the
+ * runtime parser dumb. Best-effort; reuses the same bin dir as render-open.
+ */
+export async function installRenderArtifact(
+  sandbox: SandboxProvider,
+  env?: Record<string, string>,
+): Promise<string | null> {
+  const binDir = `${sandbox.workdir()}/.render-bin`;
+  // $1 = html file (relative or absolute); $2.. = flags. Resolve $1 to an
+  // absolute path against the cwd so the runtime can `cat` it regardless of where
+  // the agent ran the command from.
+  const script =
+    `#!/bin/sh\n` +
+    `f="$1"; shift\n` +
+    `case "$f" in /*) abs="$f" ;; *) abs="$(pwd)/$f" ;; esac\n` +
+    `printf '${RENDER_ARTIFACT_SENTINEL} %s %s\\n' "$abs" "$*"\n`;
+  const cmd =
+    `mkdir -p "${binDir}" && cat > "${binDir}/render-artifact" <<'RENDER_ARTIFACT_EOF'\n${script}RENDER_ARTIFACT_EOF\nchmod +x "${binDir}/render-artifact"`;
+  try {
+    const res = await sandbox.exec('sh', ['-c', cmd], { cwd: sandbox.workdir(), ...(env ? { env } : {}) });
+    return res.exitCode === 0 ? binDir : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface RenderArtifactInvocation {
+  /** absolute path to the html file inside the sandbox workdir */
+  file: string;
+  title?: string;
+  /** parsed `--opencli "a,b"` allowlist, trimmed + de-duped */
+  opencli?: string[];
+}
+
+/**
+ * Parse a `render-artifact` sentinel line out of the agent's command output.
+ * Reads the SENTINEL the shim printed (not the raw command), so flag quoting is
+ * already collapsed by the shell: `__RENDER_ARTIFACT__ <abs-path> <flag-tail>`.
+ */
+export function parseRenderArtifact(output: string | undefined): RenderArtifactInvocation | null {
+  if (!output) return null;
+  const line = output.split('\n').find((l) => l.includes(RENDER_ARTIFACT_SENTINEL));
+  if (!line) return null;
+  const rest = line.slice(line.indexOf(RENDER_ARTIFACT_SENTINEL) + RENDER_ARTIFACT_SENTINEL.length).trim();
+  if (!rest) return null;
+  // first whitespace-delimited token is the resolved file path; the remainder
+  // is the flag tail (--title "…" --opencli "a,b").
+  const sp = rest.search(/\s/);
+  const file = (sp === -1 ? rest : rest.slice(0, sp)).trim();
+  if (!file || !file.startsWith('/')) return null;
+  const tail = sp === -1 ? '' : rest.slice(sp + 1);
+  const title = matchFlag(tail, 'title');
+  const opencliRaw = matchFlag(tail, 'opencli');
+  const opencli = opencliRaw
+    ? [...new Set(opencliRaw.split(',').map((s) => s.trim().replace(/\s+/g, ' ')).filter(Boolean))]
+    : undefined;
+  return {
+    file,
+    ...(title ? { title } : {}),
+    ...(opencli && opencli.length ? { opencli } : {}),
+  };
+}
+
+/** Pull a `--flag value` / `--flag "quoted value"` out of a collapsed flag tail. */
+function matchFlag(tail: string, flag: string): string | undefined {
+  const re = new RegExp(`--${flag}\\s+(?:"([^"]*)"|'([^']*)'|(\\S+))`);
+  const m = tail.match(re);
+  if (!m) return undefined;
+  const v = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+  return v || undefined;
 }
 
 /** Extract the URL from a `render-open <url>` command (raw or zsh -lc wrapped). */

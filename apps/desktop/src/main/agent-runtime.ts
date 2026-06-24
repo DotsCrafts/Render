@@ -21,6 +21,7 @@ import type { OpencliRouterHandle } from '@render/opencli-router';
 import type {
   AgentEvent,
   ApprovalPolicy,
+  Artifact,
   OpencliInvocation,
   SandboxMode,
   SandboxProvider,
@@ -39,16 +40,29 @@ import {
   writeAgentsMd,
   installRenderOpen,
   parseRenderOpen,
+  installRenderArtifact,
+  parseRenderArtifact,
 } from './agent-instructions.js';
 import { answerToUxMessage } from './answer-to-ux.js';
 import { detectOpencliAuthNeed } from './opencli-auth.js';
 import { createConversationGroups, type ConversationGroups } from './conversation-groups.js';
+import { createArtifactCapability, type ArtifactCapability } from './artifact-capability.js';
 
 export interface AgentRuntime {
   submit(text: string): Promise<{ turnId: string }>;
   steer(text: string): Promise<void>;
   cancel(): Promise<void>;
   resolveUx(id: string, result: UxResult): Promise<void>;
+  /**
+   * Authorize a Tier-2 artifact's opencli read: enforce its declared allowlist +
+   * (once per artifact) the human consent prompt. Called by the IPC handler that
+   * serves `window.renderArtifact.opencli`. Returns whether the call may proceed.
+   */
+  authorizeArtifactOpencli(
+    artifactId: string,
+    site: string,
+    command: string,
+  ): Promise<{ ok: boolean; error?: string }>;
   /**
    * The CURRENT conversation's browser tab group — read by the opencli bridge at
    * tab-mint time so agent tabs join the active conversation's group.
@@ -72,6 +86,12 @@ export interface AgentRuntimeDeps {
   router: OpencliRouterHandle;
   /** open a URL in Render's OWN browser tab (human-hand) — the `render-open` tool */
   openTab?: (url: string) => void;
+  /**
+   * Open a Tier-2 artifact as an isolated, ephemeral tab (the `render-artifact`
+   * tool). Wired to TabManager.createArtifact in the active conversation group.
+   * Returns the tab id so the panel's reference card can activate it.
+   */
+  openArtifact?: (artifact: Artifact, groupId: string) => string;
   /**
    * Register a conversation's tab group (label/color) with the TabManager when it
    * becomes active, so snapshots can render its chip even before the bridge mints
@@ -123,12 +143,81 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   let startPromise: Promise<void> | null = null;
   let turnSeq = 0;
   let uxSeq = 0;
+  // Tier-2 capability gate: allowlist + per-artifact consent for opencli reads.
+  const capability: ArtifactCapability = createArtifactCapability({
+    emit: (message) => deps.emit({ kind: 'ux', message }),
+    now: deps.now,
+    nextUxId: () => `ux-cap-${++uxSeq}`,
+  });
   // Per-conversation tab groups: conv-1 is the degenerate single-group case.
   // Each time a group becomes active we register it with the TabManager so its
   // label/color are known to snapshots before the bridge mints a tab into it.
   const conversations: ConversationGroups = createConversationGroups((group) => {
     deps.registerGroup?.(group);
   });
+
+  let artifactSeq = 0;
+
+  /**
+   * Read the html the agent wrote (inside the sandbox), open it as an isolated
+   * ephemeral artifact tab in the current conversation group, register its
+   * opencli allowlist, then emit the kind:'artifact' event + a reference card.
+   */
+  const deliverArtifact = async (inv: {
+    file: string;
+    title?: string;
+    opencli?: string[];
+  }): Promise<void> => {
+    let content: string;
+    try {
+      const res = await deps.sandbox.exec('cat', [inv.file], { cwd: deps.sandbox.workdir() });
+      if (res.exitCode !== 0 || !res.stdout.trim()) {
+        deps.emit({ kind: 'error', message: `render-artifact: could not read ${inv.file}` });
+        return;
+      }
+      content = res.stdout;
+    } catch (err) {
+      deps.emit({ kind: 'error', message: `render-artifact: ${errText(err)}` });
+      return;
+    }
+
+    const id = `art-${++artifactSeq}`;
+    const title = inv.title?.trim() || 'App';
+    const artifact: Artifact = {
+      id,
+      title,
+      format: 'html',
+      content,
+      ...(inv.opencli && inv.opencli.length ? { opencli: inv.opencli } : {}),
+    };
+
+    // emit the artifact event (parallel to ux), register its capability allowlist,
+    // then open the isolated tab in the active conversation's group.
+    deps.emit({ kind: 'artifact', artifact });
+    capability.register(artifact);
+    const group = conversations.current();
+    const tabId = deps.openArtifact?.(artifact, group.id);
+
+    // reference card in the panel: a Tier-1 render card linking the artifact tab.
+    deps.emit({
+      kind: 'ux',
+      message: {
+        id: `ux-art-${++uxSeq}`,
+        kind: 'render',
+        blocking: false,
+        ts: deps.now(),
+        spec: {
+          title: `Opened app: ${title}`,
+          body: inv.opencli?.length
+            ? `An interactive app is open in its own tab. It may ask to query: ${[
+                ...new Set(inv.opencli.map((c) => c.split(' ')[0])),
+              ].join(', ')}.`
+            : 'An interactive app is open in its own tab.',
+          items: [{ title, fields: { tab: tabId ?? 'opening…' } }],
+        },
+      },
+    });
+  };
 
   const buildSession = (env?: Record<string, string>): AgentSession => {
     const s = new AgentSession({
@@ -192,6 +281,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
               spec: { title: 'Opened in your browser', body: url, items: [{ title: url, url }] },
             },
           });
+          return; // don't also show the raw shim command row
+        }
+        // `render-artifact <file> --title … [--opencli …]` → deliver a Tier-2
+        // artifact: read the html the agent wrote, open an ISOLATED ephemeral tab,
+        // register its opencli allowlist, and drop a reference card in the panel.
+        // The shim printed a sentinel into the command's output (we read THAT, so
+        // shell quoting is already collapsed).
+        const artifactInv = parseRenderArtifact(collectItemOutput(event.item));
+        if (artifactInv && deps.openArtifact) {
+          void deliverArtifact(artifactInv);
           return; // don't also show the raw shim command row
         }
         // The agent ran opencli directly and it failed because the site needs a
@@ -279,7 +378,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         // agent's mandated hand) + install the `render-open` tool before boot.
         await deps.sandbox.start({ env });
         await writeAgentsMd(deps.sandbox, RENDER_AGENTS_MD, env);
+        // both the render-open and render-artifact shims live in the same
+        // .render-bin; install both (same dir) and prepend it to PATH once.
         const binDir = await installRenderOpen(deps.sandbox, env);
+        await installRenderArtifact(deps.sandbox, env);
         if (binDir) env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
         session = buildSession(env);
         await session.start();
@@ -332,6 +434,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 
   const resolveUx = async (id: string, result: UxResult): Promise<void> => {
+    // a Tier-2 artifact opencli-capability consent confirm? resolve it here.
+    if (capability.resolveConsent(id, result)) return;
     const login = pendingLogin.get(id);
     if (login) {
       pendingLogin.delete(id);
@@ -362,6 +466,12 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     });
   };
 
+  const authorizeArtifactOpencli = (
+    artifactId: string,
+    site: string,
+    command: string,
+  ): Promise<{ ok: boolean; error?: string }> => capability.authorize(artifactId, site, command);
+
   const activeGroup = (): TabGroupInfo => conversations.current();
 
   const newConversation = async (): Promise<TabGroupInfo> => {
@@ -381,6 +491,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingHitl.clear();
     pendingLogin.clear();
     loginPrompted.clear();
+    // Tier-2 artifacts are conversation-scoped (阅后即焚): drop their capability
+    // grants. Their tabs are torn down by the TabManager when the user closes
+    // them; we only revoke the consent state here.
+    capability.forgetAll();
     // Allocate the next group; subsequent agent tabs (minted by the bridge) join
     // it. We don't open an initial tab — the active group is set for the next
     // agent action, matching the bridge's lazy mint-on-demand model.
@@ -391,11 +505,21 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingHitl.clear();
     pendingLogin.clear();
     loginPrompted.clear();
+    capability.forgetAll();
     if (session) await session.dispose();
     if (codexHome) await codexHome.cleanup();
   };
 
-  return { submit, steer, cancel, resolveUx, activeGroup, newConversation, dispose };
+  return {
+    submit,
+    steer,
+    cancel,
+    resolveUx,
+    authorizeArtifactOpencli,
+    activeGroup,
+    newConversation,
+    dispose,
+  };
 }
 
 function loginOpenedUx(site: string, url: string, opened: boolean, id: string, ts: number): UxMessage {
@@ -420,4 +544,11 @@ function loginOpenedUx(site: string, url: string, opened: boolean, id: string, t
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Join a completed command item's output streams (for sentinel scanning). */
+function collectItemOutput(item: { aggregatedOutput?: unknown; stdout?: unknown; stderr?: unknown }): string {
+  return [item.aggregatedOutput, item.stdout, item.stderr]
+    .filter((p): p is string => typeof p === 'string')
+    .join('\n');
 }

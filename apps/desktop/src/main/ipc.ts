@@ -14,7 +14,10 @@ import {
   type TabState,
   type UxResult,
   type CodexProviderConfig,
+  type ArtifactOpencliRequest,
+  type ArtifactOpencliResult,
 } from '@render/protocol';
+import { runArtifactOpencli } from './artifact-opencli.js';
 import type { HumanHandHandle } from '@render/cdp-human-hand';
 import { CHROME_IPC } from '../shared/chrome-channels.js';
 import type { TabManager } from './tabs.js';
@@ -29,6 +32,8 @@ export interface IpcDeps {
   humanHand: HumanHandHandle;
   /** codex provider/auth manager (Phase A) */
   codex: CodexProvider;
+  /** opencli profile a consented artifact read routes to (Render's bridge profile) */
+  artifactOpencliProfile?: string;
 }
 
 export interface IpcBroker {
@@ -93,6 +98,21 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.codexLogout]: () => {
       codex.logout();
       return codex.getStatus();
+    },
+
+    // Tier-2 artifact → opencli capability. The page calls this via the SEPARATE
+    // artifact-preload; we gate it (allowlist + consent in the agent runtime,
+    // read-only in the runner) before running opencli on Render's bridge profile.
+    [IPC.artifactOpencli]: async (_e, req: ArtifactOpencliRequest): Promise<ArtifactOpencliResult> => {
+      if (!req || typeof req.artifactId !== 'string' || typeof req.site !== 'string' || typeof req.command !== 'string') {
+        return { ok: false, error: 'malformed artifact opencli request' };
+      }
+      const gate = await agent.authorizeArtifactOpencli(req.artifactId, req.site, req.command);
+      if (!gate.ok) return { ok: false, error: gate.error ?? 'not authorized' };
+      return runArtifactOpencli(
+        { site: req.site, command: req.command, ...(req.args ? { args: req.args } : {}) },
+        deps.artifactOpencliProfile ? { profile: deps.artifactOpencliProfile } : {},
+      );
     },
 
     [CHROME_IPC.back]: (_e, tabId: string) => tabs.goBack(tabId),

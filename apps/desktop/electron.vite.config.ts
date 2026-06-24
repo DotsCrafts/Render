@@ -29,7 +29,16 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin(bundleWorkspace)],
-    build: { rollupOptions: { input: r('src/preload/index.ts') } },
+    build: {
+      rollupOptions: {
+        input: {
+          // the main preload (chrome renderer) and the SEPARATE artifact-preload
+          // (Tier-2 isolated tabs only). Named inputs → index.js + artifact.js.
+          index: r('src/preload/index.ts'),
+          artifact: r('src/preload/artifact.ts'),
+        },
+      },
+    },
   },
   renderer: {
     root: r('src/renderer'),
