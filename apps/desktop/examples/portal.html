@@ -173,7 +173,7 @@
 
       // ── widgets ───────────────────────────────────────────────────
       const WIDGETS = [
-        { key: 'bilibili', title: 'B站排行', color: '#fb7299', src: 'bilibili ranking', lazy: true,
+        { key: 'bilibili', title: 'B站排行', color: '#fb7299', src: 'bilibili ranking',
           load: () => data('bilibili', 'ranking', [], { limit: 8 }),
           render: (d) => listHtml(rows(d), (r, i) => `<div class="row"><span class="rk ${i<3?'top':''}">${i+1}</span><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}</a><span class="sub">${esc(r.author||'')}</span></div>`) },
         { key: '36kr', title: '36氪 · 快讯', color: '#0d80fa', src: '36kr news',
