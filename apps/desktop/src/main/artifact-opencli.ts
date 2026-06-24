@@ -59,7 +59,12 @@ export interface ArtifactOpencliDeps {
  * this is the LAST gate (read-only) plus the actual invocation.
  */
 export async function runArtifactOpencli(
-  req: { site: string; command: string; args?: Record<string, string | number | boolean> },
+  req: {
+    site: string;
+    command: string;
+    positional?: Array<string | number>;
+    args?: Record<string, string | number | boolean>;
+  },
   deps: ArtifactOpencliDeps = {},
 ): Promise<ArtifactOpencliResult> {
   // Prototype mode (default): no read-only restriction — an artifact runs opencli
@@ -73,7 +78,7 @@ export async function runArtifactOpencli(
 
   const bin = deps.bin ?? 'opencli';
   const profile = deps.profile ?? 'render';
-  const argv = buildArgv(req.site, req.command, req.args);
+  const argv = buildArgv(req.site, req.command, req.positional, req.args);
   const env = { ...process.env, OPENCLI_PROFILE: profile };
 
   try {
@@ -92,13 +97,21 @@ export async function runArtifactOpencli(
   }
 }
 
-/** `<site> <command> [--key value …] -f json` — args are validated by the caller. */
+/**
+ * `<site> <command> [positional…] [--key value …] -f json`. Positional args come
+ * first (most opencli commands take their primary input positionally — a search
+ * keyword, an item id), then named flags. Args are validated by the caller.
+ */
 function buildArgv(
   site: string,
   command: string,
+  positional?: Array<string | number>,
   args?: Record<string, string | number | boolean>,
 ): string[] {
   const argv = [site, command];
+  for (const value of positional ?? []) {
+    argv.push(String(value));
+  }
   for (const [key, value] of Object.entries(args ?? {})) {
     // boolean true → bare flag; everything else → `--key value`.
     if (value === true) argv.push(`--${key}`);

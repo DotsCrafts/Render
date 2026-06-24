@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>本地生活聚合</title>
+    <style>
+      /*
+       * Tier-2 Render artifact — runs in an isolated `artifact:<id>` partition with
+       * CSP `default-src 'self' 'unsafe-inline' data:; connect-src 'self'`. So:
+       * NO external assets (fonts/CDN/images) — system font stack + CSS only.
+       * The ONLY backend path is window.renderArtifact.opencli(...) over IPC.
+       */
+      :root {
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --panel-2: #f0f2f5;
+        --ink: #16181c;
+        --ink-soft: #5b6470;
+        --line: #e3e6eb;
+        --accent: #2f6bff;
+        --accent-ink: #ffffff;
+        --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 16px rgba(16, 24, 40, 0.06);
+        --radius: 14px;
+        /* platform accents */
+        --p-dianping: #ff6633;
+        --p-ctrip: #2577e3;
+        --p-jd: #e1251b;
+        --p-taobao: #ff5000;
+        --p-xiaohongshu: #ff2741;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d0f12;
+          --panel: #16191f;
+          --panel-2: #1d2128;
+          --ink: #eef1f5;
+          --ink-soft: #9aa4b2;
+          --line: #272c34;
+          --accent: #5c8bff;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 24px rgba(0, 0, 0, 0.35);
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 18px 64px; }
+
+      header h1 { font-size: 22px; margin: 4px 0 2px; letter-spacing: -0.01em; }
+      header p { margin: 0 0 16px; color: var(--ink-soft); font-size: 13px; }
+
+      /* search bar */
+      .search {
+        position: sticky; top: 0; z-index: 5;
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: var(--radius); box-shadow: var(--shadow);
+        padding: 12px; margin-bottom: 14px;
+      }
+      .search .row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .search input[type="text"] {
+        flex: 1 1 240px; min-width: 0;
+        background: var(--panel-2); border: 1px solid var(--line);
+        color: var(--ink); border-radius: 10px; padding: 11px 13px; font-size: 15px;
+      }
+      .search input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      .search input.city { flex: 0 1 130px; }
+      button {
+        font: inherit; cursor: pointer; border-radius: 10px;
+        border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+        padding: 9px 14px; transition: transform .04s ease, background .15s ease;
+      }
+      button:active { transform: translateY(1px); }
+      button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+      button:disabled { opacity: .5; cursor: default; }
+
+      .chips { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 11px; border-radius: 999px; font-size: 13px; user-select: none;
+        border: 1px solid var(--line); background: transparent; color: var(--ink-soft);
+      }
+      .chip[aria-pressed="true"] { color: var(--ink); border-color: var(--dot); background: color-mix(in srgb, var(--dot) 12%, transparent); }
+      .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dot); }
+
+      /* per-platform status strip */
+      .lanes { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 14px; min-height: 0; }
+      .lane { font-size: 12px; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: var(--panel-2); }
+      .lane .sp { width: 11px; height: 11px; border: 2px solid var(--ink-soft); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+      .lane.err { color: var(--p-jd); }
+      .lane.ok { color: var(--ink); }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* results */
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+      .card {
+        background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+        box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 9px;
+        border-left: 3px solid var(--dot);
+      }
+      .card .badge { font-size: 11px; font-weight: 700; color: var(--dot); letter-spacing: .02em; }
+      .card .title { font-size: 15px; font-weight: 600; line-height: 1.35; }
+      .card .meta { font-size: 12.5px; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+      .card .meta .price { color: var(--p-jd); font-weight: 700; }
+      .card .actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+      .card .actions button, .card .actions a {
+        font-size: 12.5px; padding: 7px 11px; text-decoration: none;
+      }
+      a.btn { display: inline-block; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--ink); }
+      .card .note { font-size: 12px; color: var(--ink-soft); background: var(--panel-2); border-radius: 8px; padding: 6px 9px; }
+      .card .note.good { color: #1a7f4b; }
+      @media (prefers-color-scheme: dark) { .card .note.good { color: #4ade80; } }
+
+      .empty { text-align: center; color: var(--ink-soft); padding: 48px 12px; }
+      .banner { background: #fff3cd; color: #7a5b00; border: 1px solid #ffe69c; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
+      @media (prefers-color-scheme: dark) { .banner { background: #2a2410; color: #e6c66b; border-color: #4a3f17; } }
+      footer { margin-top: 36px; color: var(--ink-soft); font-size: 12px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>本地生活聚合</h1>
+        <p>一次搜索，并发聚合多平台 · 数据经 opencli 实时拉取，运行在 Render 隔离沙箱内</p>
+      </header>
+
+      <div id="banner" class="banner" hidden>
+        ⚠️ 未检测到 <code>window.renderArtifact</code> —— 此页面需在 Render 内作为 artifact 打开才能拉取真实数据。
+      </div>
+
+      <div class="search">
+        <div class="row">
+          <input id="q" type="text" placeholder="搜点什么？火锅 / 耳机 / 三亚酒店…" autocomplete="off" />
+          <input id="city" class="city" type="text" placeholder="城市(点评)" value="上海" autocomplete="off" />
+          <button id="go" class="primary">搜索</button>
+        </div>
+        <div id="chips" class="chips"></div>
+      </div>
+
+      <div id="lanes" class="lanes"></div>
+      <div id="grid" class="grid"></div>
+      <div id="empty" class="empty">输入关键词，选择平台，开始聚合搜索。</div>
+
+      <footer>Render Tier-2 artifact · 后端：opencli（profile=render）· 阅后即焚，关闭标签即销毁</footer>
+    </div>
+
+    <script>
+      'use strict';
+
+      // ── platform registry ───────────────────────────────────────────────
+      // Each platform maps a keyword → an opencli (command, positional, args) call,
+      // and normalizes a result row into a common card shape.
+      const PLATFORMS = [
+        {
+          id: 'dianping', label: '大众点评', color: 'var(--p-dianping)', on: true,
+          call: (q, ctx) => ({ cmd: 'search', pos: [q], args: ctx.city ? { city: ctx.city, limit: 12 } : { limit: 12 } }),
+          norm: (r) => ({
+            title: r.name, url: r.url,
+            meta: [r.rating && `★ ${r.rating}`, r.reviews && `${r.reviews} 评价`, r.cuisine, r.district].filter(Boolean),
+            price: r.price, id: r.shop_id, kind: 'shop',
+          }),
+        },
+        {
+          id: 'ctrip', label: '携程', color: 'var(--p-ctrip)', on: true,
+          call: (q) => ({ cmd: 'search', pos: [q], args: { limit: 12 } }),
+          norm: (r) => ({
+            title: r.name || r.eName, url: r.url,
+            meta: [r.type, r.cityName, r.score && `评分 ${r.score}`].filter(Boolean),
+            kind: 'link',
+          }),
+        },
+        {
+          id: 'jd', label: '京东', color: 'var(--p-jd)', on: true,
+          call: (q) => ({ cmd: 'search', pos: [q], args: { limit: 12 } }),
+          norm: (r) => ({
+            title: r.title, url: r.url, price: r.price,
+            meta: [r.shop].filter(Boolean), id: r.sku, kind: 'cart',
+          }),
+        },
+        {
+          id: 'taobao', label: '淘宝', color: 'var(--p-taobao)', on: true,
+          call: (q) => ({ cmd: 'search', pos: [q], args: { limit: 12 } }),
+          norm: (r) => ({
+            title: r.title, url: r.url, price: r.price,
+            meta: [r.shop, r.sales && `${r.sales} 销量`, r.location].filter(Boolean),
+            id: r.item_id, kind: 'cart',
+          }),
+        },
+        {
+          id: 'xiaohongshu', label: '小红书', color: 'var(--p-xiaohongshu)', on: false,
+          call: (q) => ({ cmd: 'search', pos: [q], args: { limit: 12 } }),
+          norm: (r) => ({
+            title: r.title, url: r.url,
+            meta: [r.author && `@${r.author}`, r.likes && `${r.likes} 赞`].filter(Boolean),
+            kind: 'link',
+          }),
+        },
+      ];
+
+      const $ = (s) => document.querySelector(s);
+      const el = (tag, props = {}, kids = []) => {
+        const n = document.createElement(tag);
+        for (const [k, v] of Object.entries(props)) {
+          if (k === 'style') n.setAttribute('style', v);
+          else if (k === 'class') n.className = v;
+          else if (k in n) n[k] = v;
+          else n.setAttribute(k, v);
+        }
+        for (const c of [].concat(kids)) n.append(c);
+        return n;
+      };
+
+      const api = window.renderArtifact;
+      if (!api || typeof api.opencli !== 'function') $('#banner').hidden = false;
+
+      // ── chips ────────────────────────────────────────────────────────────
+      const state = Object.fromEntries(PLATFORMS.map((p) => [p.id, p.on]));
+      const chipsBox = $('#chips');
+      for (const p of PLATFORMS) {
+        const chip = el('button', {
+          class: 'chip', type: 'button', 'aria-pressed': String(p.on),
+          style: `--dot:${p.color}`,
+        }, [el('span', { class: 'dot' }), p.label]);
+        chip.onclick = () => {
+          state[p.id] = !state[p.id];
+          chip.setAttribute('aria-pressed', String(state[p.id]));
+        };
+        chipsBox.append(chip);
+      }
+
+      // ── search ─────────────────────────────────────────────────────────
+      const grid = $('#grid'), lanes = $('#lanes'), empty = $('#empty');
+      let runToken = 0;
+
+      async function search() {
+        const q = $('#q').value.trim();
+        if (!q) { $('#q').focus(); return; }
+        if (!api) return;
+        const ctx = { city: $('#city').value.trim() };
+        const chosen = PLATFORMS.filter((p) => state[p.id]);
+        if (!chosen.length) return;
+
+        const token = ++runToken;
+        grid.innerHTML = ''; lanes.innerHTML = ''; empty.hidden = true;
+        $('#go').disabled = true;
+
+        const laneEls = {};
+        for (const p of chosen) {
+          const lane = el('span', { class: 'lane', style: `--dot:${p.color}` },
+            [el('span', { class: 'sp' }), `${p.label} 搜索中…`]);
+          laneEls[p.id] = lane; lanes.append(lane);
+        }
+
+        // fan out concurrently — one platform's failure never blocks the others.
+        await Promise.all(chosen.map(async (p) => {
+          const { cmd, pos, args } = p.call(q, ctx);
+          try {
+            const res = await api.opencli(p.id, cmd, pos, args);
+            if (token !== runToken) return; // a newer search superseded this one
+            if (!res || !res.ok) throw new Error((res && res.error) || '调用失败');
+            const rows = Array.isArray(res.data) ? res.data : (res.data ? [res.data] : []);
+            setLane(laneEls[p.id], p, rows.length ? `${rows.length} 条` : '无结果', rows.length ? 'ok' : 'err');
+            for (const row of rows) grid.append(renderCard(p, p.norm(row)));
+          } catch (err) {
+            if (token !== runToken) return;
+            setLane(laneEls[p.id], p, String(err.message || err).slice(0, 60), 'err');
+          }
+        }));
+
+        if (token === runToken) {
+          $('#go').disabled = false;
+          if (!grid.children.length) { empty.hidden = false; empty.textContent = '所有平台都没有返回结果。'; }
+        }
+      }
+
+      function setLane(lane, p, text, cls) {
+        lane.className = 'lane ' + cls;
+        lane.innerHTML = '';
+        lane.append(el('span', { class: 'dot', style: `width:8px;height:8px;border-radius:50%;background:${p.color}` }), `${p.label} · ${text}`);
+      }
+
+      // ── card + actions ──────────────────────────────────────────────────
+      function renderCard(p, n) {
+        const actions = [];
+        if (n.kind === 'cart' && n.id) actions.push(cartButton(p, n));
+        if (n.kind === 'shop' && n.id) actions.push(detailButton(p, n));
+        if (n.url) actions.push(el('a', { class: 'btn', href: n.url, target: '_blank', rel: 'noreferrer' }, `去${p.label} →`));
+
+        const card = el('div', { class: 'card', style: `--dot:${p.color}` }, [
+          el('div', { class: 'badge' }, p.label),
+          el('div', { class: 'title' }, n.title || '(无标题)'),
+          el('div', { class: 'meta' }, [
+            ...(n.price ? [el('span', { class: 'price' }, `¥${n.price}`)] : []),
+            ...n.meta.map((m) => el('span', {}, String(m))),
+          ]),
+          el('div', { class: 'actions' }, actions),
+        ]);
+        return card;
+      }
+
+      // 京东/淘宝 加入购物车 — add-cart is a WRITE; we send dry-run:true so the
+      // prototype never actually commits a cart. opencli returns {status,price,…}.
+      function cartButton(p, n) {
+        const btn = el('button', { type: 'button' }, '加入购物车');
+        btn.onclick = async () => {
+          btn.disabled = true; btn.textContent = '加购中…';
+          // jd add-cart <sku> / taobao add-cart <id> — both positional, n.id holds the right one.
+          try {
+            const res = await api.opencli(p.id, 'add-cart', [n.id], { 'dry-run': true });
+            const row = res.ok ? (Array.isArray(res.data) ? res.data[0] : res.data) : null;
+            const note = el('div', { class: 'note' + (res.ok ? ' good' : '') },
+              res.ok ? `✓ 可加购（试运行）${row && row.price ? ' · ¥' + row.price : ''}` : `加购失败：${res.error || ''}`.slice(0, 80));
+            btn.replaceWith(note);
+          } catch (err) {
+            btn.disabled = false; btn.textContent = '加入购物车';
+          }
+        };
+        return btn;
+      }
+
+      // 大众点评 查看详情 — shop is READ; expands field/value rows inline.
+      function detailButton(p, n) {
+        const btn = el('button', { type: 'button' }, '查看详情');
+        btn.onclick = async () => {
+          btn.disabled = true; btn.textContent = '加载中…';
+          try {
+            const res = await api.opencli('dianping', 'shop', [n.id]);
+            const rows = res.ok && Array.isArray(res.data) ? res.data : [];
+            const text = rows.map((r) => `${r.field}：${r.value}`).join('\n') || (res.error || '无详情');
+            btn.replaceWith(el('div', { class: 'note' }, text));
+          } catch (err) {
+            btn.disabled = false; btn.textContent = '查看详情';
+          }
+        };
+        return btn;
+      }
+
+      $('#go').onclick = search;
+      $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
+    </script>
+  </body>
+</html>

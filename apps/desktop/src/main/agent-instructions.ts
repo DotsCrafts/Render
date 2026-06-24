@@ -62,9 +62,9 @@ flag runs in an EPHEMERAL session and WILL NOT see that login (it falsely report
 (Public, no-login adapters like google/arxiv/wikipedia don't need it.)
 
 - **Checking status ≠ logging in.** If the user only asks to CHECK/VIEW login
-  state ("看看登录状态", "查一下我登没登"), run `whoami --site-session persistent`
-  and just REPORT the result — `AUTH_REQUIRED` (exit 77) means "未登录"; a `whoami`
-  that itself errors (e.g. `COMMAND_EXEC` "no user_id link found") means
+  state ("看看登录状态", "查一下我登没登"), run \`whoami --site-session persistent\`
+  and just REPORT the result — \`AUTH_REQUIRED\` (exit 77) means "未登录"; a \`whoami\`
+  that itself errors (e.g. \`COMMAND_EXEC\` "no user_id link found") means
   "已登录（校验漂移）", NOT 未登录. Do NOT open a login tab, and do NOT promise read-only
   then open one. Only open login when the user explicitly asks to log in, or when a
   DATA task they requested genuinely needs auth (then say why before opening).
@@ -141,13 +141,20 @@ Decide by ONE test: **does the human just READ the result, or do they OPERATE it
 
        render-artifact app.html --title "Deals board" --opencli "dianping search,bilibili search"
 
-   In the page, call \`window.renderArtifact.opencli(site, command, args)\` →
-   it resolves to \`{ ok, data }\`. ONLY the declared \`<site> <command>\` pairs are
-   permitted, they must be READ commands (search/list/get/read/hot/detail/…), and
-   the human is asked to consent the first time. Example:
+   In the page, call \`window.renderArtifact.opencli(site, command, positional, args)\`
+   → it resolves to \`{ ok, data, error }\`, where \`data\` is the parsed \`-f json\`
+   output (usually an ARRAY of row objects). ONLY the declared \`<site> <command>\`
+   pairs are permitted. **\`positional\` is an ARRAY of the command's leading
+   positional args** — most opencli commands take their primary input positionally
+   (a search keyword, an item id), NOT as a \`--flag\`. \`args\` is the named
+   \`--flag value\` options (a boolean \`true\` becomes a bare flag). Example:
 
-       const res = await window.renderArtifact.opencli('dianping', 'search', { query: '火锅' });
-       if (res.ok) render(res.data);
+       // dianping search <keyword> --city 上海 --limit 10
+       const res = await window.renderArtifact.opencli('dianping', 'search', ['火锅'], { city: '上海', limit: 10 });
+       if (res.ok) render(res.data); // data is an array of {name, rating, price, url, …}
+
+       // jd add-cart <sku> --num 1 --dry-run
+       await window.renderArtifact.opencli('jd', 'add-cart', ['100012043978'], { num: 1, 'dry-run': true });
 
 The artifact is ephemeral (阅后即焚): no persistence, gone when its tab closes. Use
 it for "a thing the human reuses", not for a one-off answer. After running

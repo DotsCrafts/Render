@@ -110,7 +110,12 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
       const gate = await agent.authorizeArtifactOpencli(req.artifactId, req.site, req.command);
       if (!gate.ok) return { ok: false, error: gate.error ?? 'not authorized' };
       return runArtifactOpencli(
-        { site: req.site, command: req.command, ...(req.args ? { args: req.args } : {}) },
+        {
+          site: req.site,
+          command: req.command,
+          ...(req.positional ? { positional: req.positional } : {}),
+          ...(req.args ? { args: req.args } : {}),
+        },
         deps.artifactOpencliProfile ? { profile: deps.artifactOpencliProfile } : {},
       );
     },

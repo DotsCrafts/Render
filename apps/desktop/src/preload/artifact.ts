@@ -27,11 +27,12 @@ const ARTIFACT_ID =
 
 const api: RenderArtifactApi = {
   artifactId: ARTIFACT_ID,
-  opencli: (site, command, args) =>
+  opencli: (site, command, positional, args) =>
     ipcRenderer.invoke(ARTIFACT_OPENCLI_CHANNEL, {
       artifactId: ARTIFACT_ID,
       site,
       command,
+      ...(positional ? { positional } : {}),
       ...(args ? { args } : {}),
     }) as Promise<ArtifactOpencliResult>,
 };

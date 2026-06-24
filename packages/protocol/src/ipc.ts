@@ -132,6 +132,13 @@ export interface ArtifactOpencliRequest {
   artifactId: string;
   site: string;
   command: string;
+  /**
+   * Leading POSITIONAL arguments, in order — most opencli commands take their
+   * primary input positionally (e.g. `dianping search <keyword>`, `jd detail
+   * <sku>`). These are emitted right after the command, before any `--flags`.
+   */
+  positional?: Array<string | number>;
+  /** named `--flag value` arguments (booleans: `true` → bare flag, `false` → omitted). */
   args?: Record<string, string | number | boolean>;
 }
 
@@ -170,8 +177,13 @@ export interface RenderApi {
 /**
  * The narrow capability surface exposed to a Tier-2 artifact page ONLY (via the
  * dedicated artifact-preload, never the main preload). An artifact page calls
- * `window.renderArtifact.opencli(site, command, args)` to aggregate content from
- * a backend through the consented, allowlisted, read-only opencli bridge.
+ * `window.renderArtifact.opencli(site, command, positional, args)` to aggregate
+ * content from a backend through the consented, allowlisted opencli bridge.
+ *
+ * `positional` carries the command's leading positional args (the common case —
+ * e.g. a search keyword); `args` carries `--flag value` options. Example:
+ *   renderArtifact.opencli('dianping', 'search', ['火锅'], { city: '上海', limit: 10 })
+ *   renderArtifact.opencli('jd', 'add-cart', ['100012043978'], { num: 1, 'dry-run': true })
  */
 export interface RenderArtifactApi {
   /** this artifact's id — baked in by the preload so the page can't spoof it */
@@ -179,6 +191,7 @@ export interface RenderArtifactApi {
   opencli(
     site: string,
     command: string,
+    positional?: Array<string | number>,
     args?: Record<string, string | number | boolean>,
   ): Promise<ArtifactOpencliResult>;
 }
