@@ -94,12 +94,14 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
   // Chromium. Set RENDER_OPENCLI_BRIDGE=0 to fall back to the system-Chrome bridge.
   if (process.env.RENDER_OPENCLI_BRIDGE === '0') return null;
 
-  // Each lease is a REAL, VISIBLE Render tab in the CURRENT conversation's tab
-  // group. `tabs new` (incl. the lazy first lease of a `<site> login`) opens an
-  // active tab the user can SEE and interact with — so login QR/password works —
-  // and the page shares the user's `persist:render` session, so the cookie it
-  // sets authenticates the agent's later opencli commands. The group is read at
-  // MINT time, so tabs minted after a conversation switch join the new group.
+  // Each lease is a REAL Render tab in the CURRENT conversation's tab group,
+  // minted in the BACKGROUND (activate:false) so a routine read — e.g. a portal
+  // widget running `bilibili ranking` — does NOT steal focus / pop a window in
+  // front of the user. The tab still appears in the group's strip (and shares the
+  // user's `persist:render` session, so a login cookie authenticates later
+  // commands); an interactive flow like `<site> login` shows up there for the user
+  // to click into rather than hijacking the foreground. The group is read at MINT
+  // time, so tabs minted after a conversation switch join the new group.
   const groupOf = deps.activeGroup ?? ((): TabGroupInfo => AGENT_GROUP);
   deps.tabs.ensureGroup(groupOf());
   const provider = createMultiWebContentsLeaseProvider({
@@ -108,7 +110,7 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
       // ensure the group is registered so its label/color are known to snapshots,
       // even if this is the first tab the conversation mints.
       deps.tabs.ensureGroup(group);
-      const id = deps.tabs.create('about:blank', { activate: true, groupId: group.id });
+      const id = deps.tabs.create('about:blank', { activate: false, groupId: group.id });
       const webContents = deps.tabs.getTarget(id);
       if (!webContents) throw new Error('bridge: minted tab has no webContents');
       return {
