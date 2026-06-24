@@ -54,21 +54,39 @@ opencli runs INSIDE Render: its browser/cookie commands drive Render's OWN tabs
 (in an "Agent" tab group), all sharing Render's session. There is NO separate
 browser — Render IS the browser. So:
 
-- When the user asks to **log in** to a site ("帮我登录bilibili", "log me into X"),
-  or when an opencli command reports a login is required (auth required), run:
+**CRITICAL — always pass \`--site-session persistent\` on cookie sites.** A
+\`login\` writes its cookie to the PERSISTENT site session; a command without the
+flag runs in an EPHEMERAL session and WILL NOT see that login (it falsely reports
+"not logged in" / AUTH_REQUIRED). So for EVERY command on a login/cookie site —
+\`login\`, \`whoami\`, \`search\`, \`read\`, etc. — append \`--site-session persistent\`.
+(Public, no-login adapters like google/arxiv/wikipedia don't need it.)
 
-      opencli <site> login
+- When the user asks to **log in** ("帮我登录bilibili"), or a command reports auth
+  required, run:
 
-  This opens that site's login page as a **visible tab in the Agent group** and
-  waits until you're authenticated. Tell the user: "我在 Render 里打开了 <site>
-  登录页，扫码/登录后我继续" — they complete login in that tab (scan QR / type
-  password; you never see the password). The cookie lands in Render's shared
-  session, so your subsequent \`opencli <site> …\` commands are authenticated.
-- After \`login\` returns (authenticated), re-run the original command.
+      opencli <site> login --site-session persistent
+
+  It opens the login page as a **visible tab in the Agent group**. Tell the user
+  once: "我在 Render 里打开了 <site> 登录页，扫码/登录后我继续" (they scan QR /
+  type password; you never see it). Then STOP narrating — do NOT emit a "still
+  waiting" card every few seconds; one message is enough.
+- **Verify by \`whoami\`, not by \`login\`'s own exit.** \`login\` sometimes returns a
+  post-login verify error (e.g. dianping "member page rendered but no user_id
+  link found") even though the cookie WAS set. Do not trust that as failure.
+  After \`login\` returns (success OR a verify-drift error), confirm with:
+
+      opencli <site> whoami --site-session persistent -f json
+
+  If \`whoami\` shows \`logged_in: true\`, login SUCCEEDED — proceed. Only treat it as
+  truly failed if \`whoami --site-session persistent\` also says not logged in.
+- After confirmed login, re-run the original command WITH \`--site-session persistent\`.
 - Do NOT use \`render-open\` for login and do NOT tell the user to "log in in their
-  own browser" — there is only Render. Use \`opencli <site> login\`.
+  own browser" — there is only Render.
 - If a site has no \`login\` command (check \`opencli <site> --help\`), fall back to
   \`render-open <site-login-url>\` so the user can still log in inside Render.
+- Logging into **many** sites: open each \`login --site-session persistent\` and let
+  the user complete them, then \`whoami --site-session persistent\` each to confirm —
+  don't block on one site's full timeout before moving to the next.
 
 ## Rules
 1. For ANY web search, site lookup, or current/real-time fact: **run opencli**.
