@@ -173,7 +173,7 @@
 
       // ── widgets ───────────────────────────────────────────────────
       const WIDGETS = [
-        { key: 'bilibili', title: 'B站排行', color: '#fb7299', src: 'bilibili ranking',
+        { key: 'bilibili', title: 'B站排行', color: '#fb7299', src: 'bilibili ranking', lazy: true,
           load: () => data('bilibili', 'ranking', [], { limit: 8 }),
           render: (d) => listHtml(rows(d), (r, i) => `<div class="row"><span class="rk ${i<3?'top':''}">${i+1}</span><a class="tl" href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.title)}</a><span class="sub">${esc(r.author||'')}</span></div>`) },
         { key: '36kr', title: '36氪 · 快讯', color: '#0d80fa', src: '36kr news',
@@ -211,8 +211,19 @@
         for (const w of WIDGETS) grid.append(card(w));
         // weather: custom interactive card (location input)
         mountWeather();
-        // load the data-driven ones (skip wttr, handled by mountWeather)
-        WIDGETS.filter((w) => w.key !== 'wttr').forEach(loadWidget);
+        for (const w of WIDGETS) {
+          if (w.key === 'wttr') continue;
+          // Browser-backed adapters (lazy) are click-to-load: they drive opencli's
+          // single Chromium bridge and are slower/fragile, so we DON'T auto-fire them
+          // on open — that keeps the stable API widgets fast and isolated.
+          if (w.lazy) {
+            const body = document.querySelector(`#w-${w.key} .body`);
+            body.innerHTML = `<div class="state"><button class="loadbtn" style="border:0;border-radius:8px;background:var(--chip);color:var(--ink);padding:8px 14px;cursor:pointer;font:inherit">点击加载（浏览器抓取）</button></div>`;
+            body.querySelector('.loadbtn').onclick = () => { body.innerHTML = '<div class="state"><span class="spin"></span>加载中…</div>'; loadWidget(w); };
+          } else {
+            loadWidget(w);
+          }
+        }
       }
 
       // ── weather widget (interactive location) ─────────────────────
