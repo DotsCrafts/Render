@@ -14,11 +14,13 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import {
-  IPC,
-  type ArtifactOpencliResult,
-  type RenderArtifactApi,
-} from '@render/protocol';
+import type { ArtifactOpencliResult, RenderArtifactApi } from '@render/protocol';
+
+// Hardcoded (NOT imported from @render/protocol's runtime) so this sandboxed
+// preload bundles self-contained — a shared runtime import would make rollup
+// hoist a chunk, and a sandboxed preload cannot require a relative chunk file.
+// Must match IPC.artifactOpencli in packages/protocol/src/ipc.ts.
+const ARTIFACT_OPENCLI_CHANNEL = 'render:artifactOpencli';
 
 const ARTIFACT_ID =
   process.argv.find((a) => a.startsWith('--render-artifact-id='))?.slice('--render-artifact-id='.length) ?? '';
@@ -26,7 +28,7 @@ const ARTIFACT_ID =
 const api: RenderArtifactApi = {
   artifactId: ARTIFACT_ID,
   opencli: (site, command, args) =>
-    ipcRenderer.invoke(IPC.artifactOpencli, {
+    ipcRenderer.invoke(ARTIFACT_OPENCLI_CHANNEL, {
       artifactId: ARTIFACT_ID,
       site,
       command,
