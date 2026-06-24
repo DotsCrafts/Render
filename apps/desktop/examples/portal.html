@@ -211,19 +211,9 @@
         for (const w of WIDGETS) grid.append(card(w));
         // weather: custom interactive card (location input)
         mountWeather();
-        for (const w of WIDGETS) {
-          if (w.key === 'wttr') continue;
-          // Browser-backed adapters (lazy) are click-to-load: they drive opencli's
-          // single Chromium bridge and are slower/fragile, so we DON'T auto-fire them
-          // on open — that keeps the stable API widgets fast and isolated.
-          if (w.lazy) {
-            const body = document.querySelector(`#w-${w.key} .body`);
-            body.innerHTML = `<div class="state"><button class="loadbtn" style="border:0;border-radius:8px;background:var(--chip);color:var(--ink);padding:8px 14px;cursor:pointer;font:inherit">点击加载（浏览器抓取）</button></div>`;
-            body.querySelector('.loadbtn').onclick = () => { body.innerHTML = '<div class="state"><span class="spin"></span>加载中…</div>'; loadWidget(w); };
-          } else {
-            loadWidget(w);
-          }
-        }
+        // All widgets auto-load. The bridge serializes /ext dispatch (FIFO), so the
+        // browser-backed widget (bilibili) no longer wedges the daemon under load.
+        WIDGETS.filter((w) => w.key !== 'wttr').forEach(loadWidget);
       }
 
       // ── weather widget (interactive location) ─────────────────────
