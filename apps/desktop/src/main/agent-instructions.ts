@@ -61,8 +61,14 @@ flag runs in an EPHEMERAL session and WILL NOT see that login (it falsely report
 \`login\`, \`whoami\`, \`search\`, \`read\`, etc. — append \`--site-session persistent\`.
 (Public, no-login adapters like google/arxiv/wikipedia don't need it.)
 
-- When the user asks to **log in** ("帮我登录bilibili"), or a command reports auth
-  required, run:
+- **Checking status ≠ logging in.** If the user only asks to CHECK/VIEW login
+  state ("看看登录状态", "查一下我登没登"), run `whoami --site-session persistent`
+  and just REPORT the result — `AUTH_REQUIRED` means "未登录", a verify-drift error
+  means "已登录（校验漂移）". Do NOT open a login tab, and do NOT promise read-only
+  then open one. Only open login when the user explicitly asks to log in, or when a
+  DATA task they requested genuinely needs auth (then say why before opening).
+- When the user asks to **log in** ("帮我登录bilibili"), or a data task they asked
+  for hits auth-required, run:
 
       opencli <site> login --site-session persistent
 
