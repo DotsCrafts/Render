@@ -113,53 +113,59 @@ Decide by ONE test: **does the human just READ the result, or do they OPERATE it
 
 - **READ it → a \`render\` block (Tier-1, below).** A finished answer, a list, a
   comparison, a table, a summary — static; the human reads it and is done.
-- **OPERATE it → a \`render-artifact\` (Tier-2).** ANY of the following MUST be a
-  render-artifact, NEVER a Tier-1 card:
-  - it has controls/inputs: a calculator, timer, form, filterable/sortable list,
-    a map, a chart you hover, anything with buttons;
+- **OPERATE it → a \`render-page\` (Tier-2, a json-render app).** ANY of the
+  following MUST be a render-page, NEVER a Tier-1 card:
+  - it has controls/inputs: a search box, a filterable/sortable list, buttons;
   - it is a dashboard / 看板 / board;
-  - it is a **multi-source aggregator that pulls live data** (e.g. github +
-    bilibili, prices across sites) and shows it in a UI;
+  - it is a **multi-source aggregator that pulls live data** (prices, feeds,
+    搜索结果 across sites) and shows it in a UI;
   - it is a small tool the human reuses.
 
-  **Rule of thumb: if the result has buttons/inputs/filters, OR fetches &
-  aggregates live data into a UI → it is a Tier-2 artifact.** Do NOT cram an
-  interactive thing or aggregated live data into a json-render card — build the
-  HTML app and run \`render-artifact\`. The artifact opens as its OWN isolated,
-  ephemeral tab the human drives directly (it does NOT round-trip through you).
+  **Rule of thumb: buttons/inputs OR live-aggregated data in a UI → render-page.**
 
-### Delivering a Tier-2 artifact
+### Delivering a Tier-2 page (json-render)
 
-1. Write a single self-contained HTML file to your workdir (inline CSS/JS, no
-   external assets), e.g. \`app.html\`.
+You produce a **json-render SPEC** (NOT raw HTML). The spec is \`{root, state,
+elements}\` and may ONLY use catalog components — that whitelist IS the security
+boundary (you cannot emit code, only a validated spec). Available components:
+- shadcn primitives: \`Stack\`, \`Grid\`, \`Card\`, \`Heading\`, \`Text\`, \`Button\`,
+  \`Badge\`, \`Table\`, \`Tabs\`, \`Input\`, \`Select\`, \`Link\`, …
+- live-data templates (prefer these for dashboards/feeds): \`PortalShell\` (page
+  frame), \`MetricGrid\` (grid of metric tiles), \`FeedList\` (titled list),
+  \`WeatherPanel\`, \`SearchPanel\` (search box).
+
+Steps:
+1. Write a spec JSON file to your workdir, e.g. \`app.json\`.
 2. Run:
 
-       render-artifact app.html --title "Trip planner"
+       render-page app.json --title "本地生活门户" --allow "agg search,coingecko top,dianping search"
 
-3. If the app must pull live data from sites/apps, declare a read-only allowlist
-   of opencli commands it may call, comma-separated:
+   \`--allow\` is the server-owned allowlist of \`<site> <command>\` pairs the page may
+   run through \`/ux/data\` (READ commands; writes are default-rejected).
 
-       render-artifact app.html --title "Deals board" --opencli "dianping search,bilibili search"
+**Live data** — a component fetches by binding an \`on.mount\` (or an event like
+\`search\`) to the \`ux_data\` action, and binding its props to \`/data/<key>\` and
+\`/status/<key>\`:
 
-   In the page, call \`window.renderArtifact.opencli(site, command, positional, args)\`
-   → it resolves to \`{ ok, data, error }\`, where \`data\` is the parsed \`-f json\`
-   output (usually an ARRAY of row objects). ONLY the declared \`<site> <command>\`
-   pairs are permitted. **\`positional\` is an ARRAY of the command's leading
-   positional args** — most opencli commands take their primary input positionally
-   (a search keyword, an item id), NOT as a \`--flag\`. \`args\` is the named
-   \`--flag value\` options (a boolean \`true\` becomes a bare flag). Example:
+       "crypto": {
+         "type": "MetricGrid",
+         "props": { "title": "币价 Top", "data": {"$state":"/data/crypto"}, "status": {"$state":"/status/crypto"} },
+         "on": { "mount": { "action": "ux_data", "params": { "key": "crypto",
+                 "request": { "site":"coingecko", "command":"top", "positional":[], "args":{"limit":8} } } } }
+       }
 
-       // dianping search <keyword> --city 上海 --limit 10
-       const res = await window.renderArtifact.opencli('dianping', 'search', ['火锅'], { city: '上海', limit: 10 });
-       if (res.ok) render(res.data); // data is an array of {name, rating, price, url, …}
+\`ux_data\` runs the opencli command via /ux/data, writes the result to
+\`/data/<key>\` (status → /status/<key>), and the component re-renders live.
+\`positional\` is the command's leading positional args (a search keyword, an id);
+\`args\` are \`--flag value\` options.
 
-       // jd add-cart <sku> --num 1 --dry-run
-       await window.renderArtifact.opencli('jd', 'add-cart', ['100012043978'], { num: 1, 'dry-run': true });
+**Read the CANONICAL example first:** \`~/workspace/opencli-ux/examples/portal-jsonrender-live.json\`
+— it shows the full shape (state defaults, SearchPanel/MetricGrid/FeedList/WeatherPanel
+all wired with on.mount→ux_data). Copy its structure.
 
-The artifact is ephemeral (阅后即焚): no persistence, gone when its tab closes. Use
-it for "a thing the human reuses", not for a one-off answer. After running
-\`render-artifact\`, end your turn (optionally with a one-line \`render\` block telling
-the user the app is open) — do NOT also dump the data as a card.
+The page opens in its OWN tab, served at a local URL by the opencli-ux kernel.
+After running \`render-page\`, end your turn (optionally a one-line \`render\` block
+telling the user the app is open) — do NOT also dump the data as a card.
 
 ## Presenting your answer — COMPOSE A UI THAT FITS THE CONTENT
 
@@ -237,43 +243,40 @@ export async function installRenderOpen(sandbox: SandboxProvider, env?: Record<s
   }
 }
 
-/** Sentinel a `render-artifact` invocation prints so the runtime can open a tab. */
-export const RENDER_ARTIFACT_SENTINEL = '__RENDER_ARTIFACT__';
+/** Sentinel a `render-page` invocation prints so the runtime can serve + open it. */
+export const RENDER_PAGE_SENTINEL = '__RENDER_PAGE__';
 
 /**
- * Install a `render-artifact <html-file> --title "…" [--opencli "a,b"]` shim into
- * the sandbox bin dir. Like `render-open`, the shim only PRINTS a sentinel line
- * (the resolved absolute html path + the raw flag tail); the runtime watches the
- * agent's command stream for it, reads the html file, and emits a kind:'artifact'
- * event. Resolving the path here (in the shim, where the cwd is known) keeps the
- * runtime parser dumb. Best-effort; reuses the same bin dir as render-open.
+ * Install a `render-page <spec-file> --title "…" --allow "site cmd,…"` shim into
+ * the sandbox bin dir. Like `render-open`, the shim only PRINTS a TAB-delimited
+ * sentinel (the resolved absolute spec path + title + allowlist); the runtime
+ * reads the json-render spec, serves it through the opencli-ux kernel (`ux render`)
+ * and opens the URL in a tab. Resolving the path here (where the cwd is known)
+ * keeps the runtime parser dumb. Best-effort; reuses the render-open bin dir.
  */
-export async function installRenderArtifact(
+export async function installRenderPage(
   sandbox: SandboxProvider,
   env?: Record<string, string>,
 ): Promise<string | null> {
   const binDir = `${sandbox.workdir()}/.render-bin`;
-  // $1 = html file (relative or absolute); $2.. = flags. Resolve $1 to an
-  // absolute path against the cwd so the runtime can `cat` it regardless of where
-  // the agent ran the command from.
-  // Parse flags HERE (where "$@" preserves each arg intact — incl. a multi-word
-  // --opencli "a b,c d"); emit a TAB-delimited sentinel so the runtime parser
-  // never has to reconstruct shell quoting (which `$*` would have flattened away).
+  // $1 = spec file (relative/absolute); $2.. = flags. Parse flags HERE (where "$@"
+  // preserves each arg intact, incl. a multi-word --allow "a b,c d"); emit a
+  // TAB-delimited sentinel so the runtime never reconstructs shell quoting.
   const script =
     `#!/bin/sh\n` +
     `f="$1"; shift\n` +
     `case "$f" in /*) abs="$f" ;; *) abs="$(pwd)/$f" ;; esac\n` +
-    `title=""; opencli=""\n` +
+    `title=""; allow=""\n` +
     `while [ $# -gt 0 ]; do\n` +
     `  case "$1" in\n` +
     `    --title) title="$2"; shift 2 ;;\n` +
-    `    --opencli) opencli="$2"; shift 2 ;;\n` +
+    `    --allow) allow="$2"; shift 2 ;;\n` +
     `    *) shift ;;\n` +
     `  esac\n` +
     `done\n` +
-    `printf '${RENDER_ARTIFACT_SENTINEL}\\t%s\\t%s\\t%s\\n' "$abs" "$title" "$opencli"\n`;
+    `printf '${RENDER_PAGE_SENTINEL}\\t%s\\t%s\\t%s\\n' "$abs" "$title" "$allow"\n`;
   const cmd =
-    `mkdir -p "${binDir}" && cat > "${binDir}/render-artifact" <<'RENDER_ARTIFACT_EOF'\n${script}RENDER_ARTIFACT_EOF\nchmod +x "${binDir}/render-artifact"`;
+    `mkdir -p "${binDir}" && cat > "${binDir}/render-page" <<'RENDER_PAGE_EOF'\n${script}RENDER_PAGE_EOF\nchmod +x "${binDir}/render-page"`;
   try {
     const res = await sandbox.exec('sh', ['-c', cmd], { cwd: sandbox.workdir(), ...(env ? { env } : {}) });
     return res.exitCode === 0 ? binDir : null;
@@ -282,37 +285,31 @@ export async function installRenderArtifact(
   }
 }
 
-export interface RenderArtifactInvocation {
-  /** absolute path to the html file inside the sandbox workdir */
+export interface RenderPageInvocation {
+  /** absolute path to the json-render spec file inside the sandbox workdir */
   file: string;
   title?: string;
-  /** parsed `--opencli "a,b"` allowlist, trimmed + de-duped */
-  opencli?: string[];
+  /** the `--allow "site cmd,…"` allowlist (raw string, passed to `ux render --allow`) */
+  allow?: string;
 }
 
 /**
- * Parse a `render-artifact` sentinel line out of the agent's command output.
- * Reads the SENTINEL the shim printed (not the raw command), so flag quoting is
- * already collapsed by the shell: `__RENDER_ARTIFACT__ <abs-path> <flag-tail>`.
+ * Parse a `render-page` sentinel line out of the agent's command output. Reads the
+ * SENTINEL the shim printed: `__RENDER_PAGE__ \t <abs-spec-path> \t <title> \t <allow>`.
  */
-export function parseRenderArtifact(output: string | undefined): RenderArtifactInvocation | null {
+export function parseRenderPage(output: string | undefined): RenderPageInvocation | null {
   if (!output) return null;
-  const line = output.split('\n').find((l) => l.includes(RENDER_ARTIFACT_SENTINEL));
+  const line = output.split('\n').find((l) => l.includes(RENDER_PAGE_SENTINEL));
   if (!line) return null;
-  // TAB-delimited: SENTINEL \t <abs-path> \t <title> \t <opencli-list>. The shim
-  // already parsed the flags, so values arrive intact (no quote reconstruction).
-  const parts = line.slice(line.indexOf(RENDER_ARTIFACT_SENTINEL)).split('\t');
+  const parts = line.slice(line.indexOf(RENDER_PAGE_SENTINEL)).split('\t');
   const file = (parts[1] ?? '').trim();
   if (!file || !file.startsWith('/')) return null;
   const title = (parts[2] ?? '').trim() || undefined;
-  const opencliRaw = (parts[3] ?? '').trim();
-  const opencli = opencliRaw
-    ? [...new Set(opencliRaw.split(',').map((s) => s.trim().replace(/\s+/g, ' ')).filter(Boolean))]
-    : undefined;
+  const allow = (parts[3] ?? '').trim() || undefined;
   return {
     file,
     ...(title ? { title } : {}),
-    ...(opencli && opencli.length ? { opencli } : {}),
+    ...(allow ? { allow } : {}),
   };
 }
 

@@ -11,7 +11,6 @@
 import { WebContentsView, type BaseWindow, type WebContents } from 'electron';
 import type { TabState, TabGroupInfo } from '@render/protocol';
 import { CHROME, clampPanelWidth, contentBounds, type Bounds } from './layout.js';
-import { artifactPartition, hardenArtifactSession, writeArtifactFile } from './artifact-session.js';
 
 export const HOME_URL = 'about:blank';
 const BLANK_URLS = new Set(['', 'about:blank', HOME_URL]);
@@ -36,12 +35,6 @@ export interface TabManagerDeps {
   /** called with a fresh immutable snapshot whenever tab state changes */
   onChange: (tabs: TabState[]) => void;
   /**
-   * Absolute path to the artifact-preload script. Injected ONLY into Tier-2
-   * artifact tabs (never normal browsing tabs), so the narrow
-   * `window.renderArtifact` capability is exposed to artifact pages alone.
-   */
-  artifactPreload?: string;
-  /**
    * Lazily resolves the home/new-tab URL — Render's default landing page is the
    * opencli-served portal (`opencli ux serve`). Read at `create()` time (no arg),
    * so a tab opened before the portal server is ready falls back to blank and the
@@ -54,7 +47,6 @@ export interface TabManagerDeps {
 export class TabManager {
   private readonly window: BaseWindow;
   private readonly onChange: (tabs: TabState[]) => void;
-  private readonly artifactPreload?: string;
   private readonly homeUrl?: () => string | null;
   private readonly tabs = new Map<string, Tab>();
   /** group id → group metadata (label/color), surfaced in every snapshot. */
@@ -69,7 +61,6 @@ export class TabManager {
   constructor(deps: TabManagerDeps) {
     this.window = deps.window;
     this.onChange = deps.onChange;
-    if (deps.artifactPreload) this.artifactPreload = deps.artifactPreload;
     if (deps.homeUrl) this.homeUrl = deps.homeUrl;
   }
 
@@ -99,49 +90,6 @@ export class TabManager {
     view.setBounds(this.bounds());
     view.setVisible(false);
     void view.webContents.loadURL(target);
-
-    if (opts.activate ?? true) this.activate(id);
-    else this.emit();
-    return id;
-  }
-
-  /**
-   * Open a Tier-2 artifact in an ISOLATED, ephemeral tab. Distinct from create():
-   *   • partition `artifact:<id>` (in-memory, NOT the shared persist:render) so
-   *     the artifact can't touch the user's logins;
-   *   • a no-network CSP injected on the session (only the consented opencli
-   *     capability bridge can reach a backend);
-   *   • the artifact-preload (not the normal one) → exposes window.renderArtifact.
-   * The HTML is written to a temp file and loaded via file://. Returns the tab id.
-   */
-  createArtifact(
-    html: string,
-    opts: { id: string; title: string; groupId?: string; activate?: boolean },
-  ): string {
-    const id = `tab-${++this.seq}`;
-    const partition = artifactPartition(opts.id);
-    hardenArtifactSession(partition); // CSP on the session BEFORE the view loads
-    const view = new WebContentsView({
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        partition,
-        ...(this.artifactPreload ? { preload: this.artifactPreload } : {}),
-        // bake the artifact id into the preload's process args so the page can't
-        // spoof which artifact it is when calling the opencli capability bridge.
-        additionalArguments: [`--render-artifact-id=${opts.id}`],
-      },
-    });
-    const tab: Tab = { id, view, ...(opts.groupId ? { groupId: opts.groupId } : {}) };
-
-    this.tabs.set(id, tab);
-    this.order = [...this.order, id];
-    this.wireEvents(tab);
-    this.window.contentView.addChildView(view);
-    view.setBounds(this.bounds());
-    view.setVisible(false);
-    void view.webContents.loadURL(writeArtifactFile(opts.id, html));
 
     if (opts.activate ?? true) this.activate(id);
     else this.emit();

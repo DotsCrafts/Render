@@ -32,10 +32,8 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          // the main preload (chrome renderer) and the SEPARATE artifact-preload
-          // (Tier-2 isolated tabs only). Named inputs → index.js + artifact.js.
+          // the single chrome-renderer preload.
           index: r('src/preload/index.ts'),
-          artifact: r('src/preload/artifact.ts'),
         },
       },
     },

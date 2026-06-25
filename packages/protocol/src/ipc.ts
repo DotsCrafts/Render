@@ -18,31 +18,9 @@ export type AgentEvent =
   | { kind: 'delta'; itemId?: string; text: string }
   | { kind: 'reasoning'; itemId?: string; text: string }
   | { kind: 'ux'; message: UxMessage } // a render/form/confirm/login surfaced
-  | { kind: 'artifact'; artifact: Artifact } // a Tier-2 ephemeral app delivered
   | { kind: 'turn_completed'; status: string; durationMs?: number }
   | { kind: 'sandbox'; status: 'spawning' | 'ready' | 'closed'; provider: string }
   | { kind: 'error'; message: string };
-
-/**
- * A Tier-2 artifact — an ephemeral, isolated agent-generated mini-app the human
- * drives DIRECTLY (no longer per-turn through the agent). Opened in its own
- * WebContentsView tab on a fresh in-memory partition (`artifact:<id>`), NEVER the
- * shared `persist:render` session that holds the user's logins. "阅后即焚":
- * no persistence/versioning in M1 — gone when the tab closes / conversation ends.
- *
- * M1: `format:'html'` only, `content` inline. The optional `opencli` allowlist
- * declares which `<site> <command>` reads the artifact may run through the
- * narrow, user-consented capability bridge (see window.renderArtifact.opencli).
- */
-export interface Artifact {
-  id: string;
-  title: string;
-  format: 'html';
-  /** inline artifact source (M1: the full HTML document) */
-  content: string;
-  /** allowlist of `"<site> <command>"` opencli reads this artifact may request */
-  opencli?: string[];
-}
 
 // ── Browser tab / human-hand state (main → renderer) ─────────────────────────
 
@@ -117,38 +95,7 @@ export const IPC = {
   // main → renderer (emit)
   agentEvent: 'render:agentEvent', // AgentEvent
   tabsChanged: 'render:tabsChanged', // TabState[]
-
-  // artifact → main (invoke, via the SEPARATE artifact-preload only)
-  // the narrow, consented opencli capability a Tier-2 artifact page may call.
-  artifactOpencli: 'render:artifactOpencli', // (ArtifactOpencliRequest) → ArtifactOpencliResult
 } as const;
-
-/**
- * A read request a Tier-2 artifact makes against opencli through the consented
- * capability bridge. `artifactId` scopes the call to its declared allowlist and
- * its cached consent grant; `site`/`command`/`args` form the opencli invocation.
- */
-export interface ArtifactOpencliRequest {
-  artifactId: string;
-  site: string;
-  command: string;
-  /**
-   * Leading POSITIONAL arguments, in order — most opencli commands take their
-   * primary input positionally (e.g. `dianping search <keyword>`, `jd detail
-   * <sku>`). These are emitted right after the command, before any `--flags`.
-   */
-  positional?: Array<string | number>;
-  /** named `--flag value` arguments (booleans: `true` → bare flag, `false` → omitted). */
-  args?: Record<string, string | number | boolean>;
-}
-
-export interface ArtifactOpencliResult {
-  ok: boolean;
-  /** parsed JSON opencli returned on success */
-  data?: unknown;
-  /** why the call was rejected (not allowlisted / consent denied / not a read / failed) */
-  error?: string;
-}
 
 export interface RenderApi {
   submitPrompt(text: string): Promise<{ turnId: string }>;
@@ -172,26 +119,4 @@ export interface RenderApi {
   codexLogout(): Promise<CodexProviderStatus>;
   onAgentEvent(cb: (e: AgentEvent) => void): () => void;
   onTabsChanged(cb: (tabs: TabState[]) => void): () => void;
-}
-
-/**
- * The narrow capability surface exposed to a Tier-2 artifact page ONLY (via the
- * dedicated artifact-preload, never the main preload). An artifact page calls
- * `window.renderArtifact.opencli(site, command, positional, args)` to aggregate
- * content from a backend through the consented, allowlisted opencli bridge.
- *
- * `positional` carries the command's leading positional args (the common case —
- * e.g. a search keyword); `args` carries `--flag value` options. Example:
- *   renderArtifact.opencli('dianping', 'search', ['火锅'], { city: '上海', limit: 10 })
- *   renderArtifact.opencli('jd', 'add-cart', ['100012043978'], { num: 1, 'dry-run': true })
- */
-export interface RenderArtifactApi {
-  /** this artifact's id — baked in by the preload so the page can't spoof it */
-  readonly artifactId: string;
-  opencli(
-    site: string,
-    command: string,
-    positional?: Array<string | number>,
-    args?: Record<string, string | number | boolean>,
-  ): Promise<ArtifactOpencliResult>;
 }
