@@ -15,11 +15,11 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Read commands the portal page is allowed to run through /ux/data (server-owned allowlist). */
-const PORTAL_ALLOW = 'bilibili ranking,36kr news,arxiv recent,coingecko top,wttr current,agg search';
+const PORTAL_ALLOW = 'agg search,coingecko top,arxiv recent,36kr news,wttr current';
 
 export interface HomePortal {
   /** The served portal URL once ready, else null (disabled / not yet up). */
@@ -52,13 +52,38 @@ function resolvePortalHtml(): string | null {
   return existsSync(guess) ? guess : null;
 }
 
+/**
+ * Resolve the json-render portal spec (opencli-ux/examples/portal-jsonrender-live.json),
+ * served via `ux render --spec` through the catalog-whitelisted json-render engine.
+ * This is the DEFAULT home now; the raw-HTML portal is the fallback if it's missing.
+ */
+function resolvePortalSpec(uxMjs: string): string | null {
+  const env = process.env.RENDER_PORTAL_SPEC?.trim();
+  if (env) return existsSync(env) ? env : null;
+  // the fixture lives next to ux.mjs in the opencli-ux checkout.
+  const guess = join(dirname(uxMjs), 'examples', 'portal-jsonrender-live.json');
+  return existsSync(guess) ? guess : null;
+}
+
 export function startHomePortal(opts: { profile?: string } = {}): HomePortal {
   if (process.env.RENDER_HOME_PORTAL === '0') return DISABLED;
 
   const uxMjs = resolveUxMjs();
+  if (!uxMjs) {
+    console.warn('[home-portal] ux.mjs not found — home portal disabled, tabs open blank.');
+    return DISABLED;
+  }
+  // Default home = the catalog-whitelisted json-render portal (`render --spec`).
+  // Falls back to the raw-HTML portal (`serve --html`) if the spec is missing.
+  const spec = resolvePortalSpec(uxMjs);
   const html = resolvePortalHtml();
-  if (!uxMjs || !html) {
-    console.warn('[home-portal] ux.mjs or portal.html not found — home portal disabled, tabs open blank.');
+  const portalArgv = spec
+    ? [uxMjs, 'render', '--spec', spec, '--keep', '--allow', PORTAL_ALLOW, '--no-open']
+    : html
+      ? [uxMjs, 'serve', '--html', html, '--allow', PORTAL_ALLOW, '--no-open']
+      : null;
+  if (!portalArgv) {
+    console.warn('[home-portal] no portal spec or html found — home portal disabled, tabs open blank.');
     return DISABLED;
   }
 
@@ -71,7 +96,7 @@ export function startHomePortal(opts: { profile?: string } = {}): HomePortal {
   const profile = opts.profile || process.env.OPENCLI_PROFILE || 'render';
   let child: ChildProcess | null = null;
   try {
-    child = spawn('node', [uxMjs, 'serve', '--html', html, '--allow', PORTAL_ALLOW, '--no-open'], {
+    child = spawn('node', portalArgv, {
       env: { ...process.env, OPENCLI_PROFILE: profile },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
