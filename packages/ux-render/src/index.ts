@@ -9,5 +9,6 @@
 export { AgentPanel } from "./AgentPanel";
 export type { AgentPanelProps } from "./AgentPanel";
 export { UxSurface } from "./UxSurface";
+export type { ResultAction } from "./surfaces/ResultActions";
 export { uxCatalog, UX_ACTIONS } from "./catalog";
 export { registry } from "./registry";

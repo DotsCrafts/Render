@@ -48,6 +48,27 @@ export interface TabState {
   group?: TabGroupInfo;
 }
 
+// ── Saved render-pages (Delta 3 persistence) ─────────────────────────────────
+
+/** A persisted page version: the json-render spec + its server-owned allowlist. */
+export interface SavedPageRecord {
+  id: string;
+  title: string;
+  /** the json-render page spec, as a JSON string (re-served live on reopen) */
+  specJson: string;
+  /** the `<site> <command>,…` allowlist the page may run via /ux/data */
+  allow: string;
+  convId?: string;
+  /** monotonic version (newest is live); bumped by the Ask-agent loop */
+  version: number;
+  savedAt: number;
+  /** true once the human explicitly saved it (shows in the gallery) */
+  saved: boolean;
+}
+
+/** Gallery-facing summary (the spec is omitted — fetched on reopen). */
+export type SavedPageMeta = Omit<SavedPageRecord, 'specJson'>;
+
 // ── Codex provider / auth (Phase A) ──────────────────────────────────────────
 
 export type CodexWireApi = 'chat' | 'responses';
@@ -82,8 +103,15 @@ export const IPC = {
   tabClose: 'render:tabClose',
   tabActivate: 'render:tabActivate',
   setPanelWidth: 'render:setPanelWidth', // (width:number) — resize the agent panel
+  setPanelOpen: 'render:setPanelOpen', // (open:boolean) — collapse/expand the agent panel
   setOverlay: 'render:setOverlay', // (hidden:boolean) — hide page views for a renderer modal
   getState: 'render:getState',
+
+  // saved render-pages (Delta 3) — persist a spec, list the gallery, reopen live
+  savePage: 'render:savePage', // (id) → SavedPageMeta | null
+  listPages: 'render:listPages', // () → SavedPageMeta[]
+  openPage: 'render:openPage', // (id) → boolean (re-served + opened in a tab)
+  askPage: 'render:askPage', // (id, instruction) — pull a page back into the agent
 
   // codex provider/auth (Phase A) — all return CodexProviderStatus
   codexStatus: 'render:codexStatus',
@@ -109,9 +137,19 @@ export interface RenderApi {
   tabClose(tabId: string): Promise<void>;
   tabActivate(tabId: string): Promise<void>;
   setPanelWidth(width: number): Promise<void>;
+  /** collapse/expand the agent panel — re-insets native page views to fill the gap */
+  setPanelOpen(open: boolean): Promise<void>;
   /** hide/show native page views so a renderer modal isn't occluded by them */
   setOverlay(hidden: boolean): Promise<void>;
   getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[] }>;
+  /** Flip a delivered page to saved:true so it joins the Saved-Pages gallery. */
+  savePage(id: string): Promise<SavedPageMeta | null>;
+  /** List the saved pages (newest-first) for the gallery launcher. */
+  listPages(): Promise<SavedPageMeta[]>;
+  /** Re-serve a saved page's spec and open it in a tab. */
+  openPage(id: string): Promise<boolean>;
+  /** Pull a page back into the conversation, seeded with its spec, to iterate. */
+  askPage(id: string, instruction: string): Promise<void>;
   codexStatus(): Promise<CodexProviderStatus>;
   codexSetProvider(p: CodexProviderConfig): Promise<CodexProviderStatus>;
   codexLoginApiKey(apiKey: string): Promise<CodexProviderStatus>;

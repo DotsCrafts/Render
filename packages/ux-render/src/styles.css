@@ -1,5 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Unified Render design tokens — the single source of truth for BOTH the agent
+   panel (this package) and the window chrome (apps/desktop renderer). */
+@import "./tokens.css";
 
 /* Scan the shadcn component bundle so Tailwind generates the classes it uses.
    Globs cover both the flat (.pnpm hoist) and nested node_modules layouts. */
@@ -39,82 +42,37 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-mono);
 }
 
+/* shadcn contract → unified tokens. These reference the elevation/semantic vars
+   from tokens.css, so they automatically follow the light overrides there.
+   (`--border` is already defined by tokens.css; don't re-alias it.) */
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-  }
+  --background: var(--bg-surface);
+  --foreground: var(--fg);
+  --card: var(--bg-raised);
+  --card-foreground: var(--fg);
+  --popover: var(--bg-overlay);
+  --popover-foreground: var(--fg);
+  --primary: var(--brand);
+  --primary-foreground: var(--fg-onBrand);
+  --secondary: var(--bg-raised);
+  --secondary-foreground: var(--fg);
+  --muted: var(--bg-inset);
+  --muted-foreground: var(--fg-muted);
+  --accent: var(--bg-active);
+  --accent-foreground: var(--fg);
+  --destructive: var(--danger);
+  --input: var(--border-strong);
+  --ring: var(--brand-line);
+  --chart-1: var(--brand);
+  --chart-2: var(--command);
+  --chart-3: var(--accent-2);
+  --chart-4: var(--agent);
+  --chart-5: var(--warning);
 }
 
 @layer base {
@@ -123,9 +81,476 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-ui);
   }
 }
 
 button {
   cursor: pointer;
+}
+
+/* ============================================================
+   AGENT PANEL — "elevate the answer, demote the process".
+   Plain CSS (not Tailwind utilities) so the classes are stable
+   regardless of content-scanning. All values are token-driven.
+   ============================================================ */
+
+.rd-panel {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  background: var(--bg-surface);
+  color: var(--fg);
+  font-family: var(--font-ui);
+}
+
+/* — header — */
+.rd-panel-head {
+  height: 48px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.rd-panel-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rd-status {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  flex: none;
+}
+.rd-status > .dot {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--fg-faint);
+}
+.rd-status > .ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  background: var(--success);
+  opacity: 0.35;
+  animation: rd-pulse 1.6s ease-in-out infinite;
+  display: none;
+}
+.rd-status.working > .dot {
+  background: var(--success);
+}
+.rd-status.working > .ring {
+  display: block;
+}
+.rd-panel-title {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.rd-panel-sub {
+  font-size: var(--fs-mini);
+  color: var(--fg-subtle);
+}
+.rd-spacer {
+  flex: 1;
+}
+.rd-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-subtle);
+  font-family: var(--font-ui);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  cursor: pointer;
+}
+.rd-toggle:hover {
+  color: var(--fg);
+  background: var(--bg-raised);
+}
+.rd-toggle.on {
+  color: var(--brand);
+  border-color: var(--brand-line);
+  background: var(--brand-tint);
+}
+.rd-iconbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+}
+.rd-iconbtn:hover:not(:disabled) {
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+.rd-iconbtn:disabled {
+  color: var(--fg-faint);
+  cursor: default;
+  opacity: 0.5;
+}
+.rd-iconbtn.ok {
+  color: var(--success);
+}
+
+/* — feed body — */
+.rd-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* Feed children must keep their natural height so the feed scrolls instead of
+   compressing cards — otherwise flex-shrink:1 + .rd-surface overflow:hidden
+   clips each card's content. */
+.rd-feed > * {
+  flex: 0 0 auto;
+}
+.rd-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--fg-subtle);
+  font-size: var(--fs-mini);
+  max-width: 30ch;
+  line-height: 1.6;
+}
+
+/* — human turn — */
+.rd-human {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.rd-human-avatar {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--human-tint);
+  box-shadow: inset 0 0 0 1px var(--human-line, oklch(0.705 0.135 244 / 0.35));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--human);
+}
+.rd-human-text {
+  flex: 1;
+  padding-top: 2px;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  color: var(--fg);
+}
+
+/* — activity lane (demoted process) — */
+.rd-activity {
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-faint);
+}
+.rd-activity-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.rd-activity-summary {
+  font-size: var(--fs-mini);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+.rd-activity-meta {
+  font-size: var(--fs-mini);
+  color: var(--fg-subtle);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rd-chevron {
+  flex: none;
+  transition: transform 0.18s ease;
+  color: var(--fg-faint);
+}
+.rd-chevron.open {
+  transform: rotate(180deg);
+}
+.rd-activity-body {
+  padding: 2px 14px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-top: 1px solid var(--border-faint);
+  margin-top: 2px;
+}
+.rd-step {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+.rd-step-key {
+  flex: none;
+  width: 58px;
+  white-space: nowrap;
+}
+.rd-step-val {
+  color: var(--fg-muted);
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rd-step.reason .rd-step-key {
+  color: var(--agent);
+}
+.rd-step.command .rd-step-key {
+  color: var(--command);
+}
+.rd-step.error .rd-step-key {
+  color: var(--danger);
+}
+.rd-step.error .rd-step-val {
+  color: var(--danger);
+}
+.rd-step.you .rd-step-key {
+  color: var(--human);
+}
+.rd-step.muted .rd-step-key {
+  color: var(--fg-faint);
+}
+
+/* — elevated answer card — */
+.rd-answer {
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border);
+}
+.rd-answer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.rd-answer-head .label {
+  font-size: var(--fs-mini);
+  font-weight: 600;
+  color: var(--fg);
+}
+.rd-answer-body {
+  padding: 9px 16px 15px;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+/* — streaming / typing affordance — */
+.rd-typing {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding-left: 2px;
+  color: var(--fg-subtle);
+  font-size: var(--fs-mini);
+}
+.rd-typing .ico {
+  flex: none;
+  animation: rd-spin 1.1s linear infinite;
+  color: var(--agent);
+}
+.rd-typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.rd-typing-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--fg-subtle);
+  animation: rd-typing 1.2s infinite;
+}
+.rd-typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.rd-typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* — skeleton (pre-first-token) — */
+.rd-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rd-skeleton-line {
+  height: 10px;
+  border-radius: var(--r-xs);
+  background: linear-gradient(
+    90deg,
+    var(--bg-inset) 0%,
+    var(--bg-raised) 50%,
+    var(--bg-inset) 100%
+  );
+  background-size: 200% 100%;
+  animation: rd-shimmer 1.4s linear infinite;
+}
+
+/* ============================================================
+   UX SURFACE — generative cards on the shared card + accent rail.
+   ============================================================ */
+.rd-surface {
+  --rail: var(--agent);
+  --rail-tint: var(--agent-tint);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--rail);
+  overflow: hidden;
+}
+.rd-surface.render {
+  --rail: var(--command);
+  --rail-tint: var(--command-tint);
+}
+.rd-surface.form {
+  --rail: var(--human);
+  --rail-tint: var(--human-tint);
+}
+.rd-surface.confirm {
+  --rail: var(--warning);
+  --rail-tint: var(--warning-tint);
+}
+.rd-surface.confirm.danger {
+  --rail: var(--danger);
+  --rail-tint: var(--danger-tint);
+}
+.rd-surface.login {
+  --rail: var(--accent-2);
+  --rail-tint: var(--accent-2-tint);
+}
+/* block-decision card (Delta 1): the agent needs a human decision/steer. */
+.rd-surface.block {
+  --rail: var(--agent);
+  --rail-tint: var(--agent-tint);
+}
+.rd-surface.block.danger {
+  --rail: var(--danger);
+  --rail-tint: var(--danger-tint);
+}
+.rd-surface-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-faint);
+}
+.rd-surface-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--rail);
+}
+.rd-surface-kind .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--rail);
+}
+.rd-pill-blocking {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  color: var(--warning);
+  background: var(--warning-tint);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+}
+.rd-pill-blocking.resolved {
+  color: var(--fg-subtle);
+  background: var(--bg-active);
+}
+.rd-surface-body {
+  padding: 12px 14px;
+}
+
+/* Delta 2 — the quiet next-step row under a RESULT card. A subtle divider, then
+   small ghost buttons that light up on hover. "demote the process": these never
+   compete with the answer above them. */
+.rd-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-faint);
+  background: var(--bg-inset);
+}
+.rd-result-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: var(--fs-mini);
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+.rd-result-action:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+.rd-result-action:active {
+  background: var(--bg-active);
+}
+.rd-result-action.saved {
+  color: var(--success);
+  cursor: default;
+}
+.rd-result-action.saved:hover {
+  background: transparent;
+  border-color: transparent;
+}
+.rd-result-action-ico {
+  display: inline-flex;
+  opacity: 0.85;
 }

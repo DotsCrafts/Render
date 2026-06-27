@@ -28,53 +28,85 @@ export function LoginSurface({
     onResolve({ action: "login_done", loggedIn: false, account: spec.site });
   };
 
+  const cancel = () => onResolve({ action: "login_cancel", loggedIn: false });
+
   return (
-    <div className="rounded-xl border border-border bg-card text-card-foreground p-5">
+    <div>
       <div className="flex items-center gap-2 mb-2">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-sky-500/15 text-sky-500 text-xs font-semibold">
-          ↪
+        <span
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md"
+          style={{ background: "var(--accent-2-tint)", color: "var(--accent-2)" }}
+          aria-hidden
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="7" width="10" height="6.5" rx="1.4" />
+            <path d="M5.2 7V5.2a2.8 2.8 0 015.6 0V7" />
+          </svg>
         </span>
-        <h3 className="text-base font-semibold">
-          Log in to <span className="font-mono">{spec.site}</span>
+        <h3 className="text-base font-semibold" style={{ color: "var(--fg)" }}>
+          Sign in to <span className="font-mono">{spec.site}</span>
         </h3>
       </div>
 
       {spec.reason ? (
-        <p className="text-sm text-muted-foreground mb-3">{spec.reason}</p>
+        <p className="text-sm mb-3" style={{ color: "var(--fg-muted)" }}>
+          {spec.reason}
+        </p>
       ) : (
-        <p className="text-sm text-muted-foreground mb-3">
+        <p className="text-sm mb-3" style={{ color: "var(--fg-muted)" }}>
           The agent needs your session on{" "}
           <span className="font-mono">{spec.site}</span> to continue.
         </p>
       )}
 
-      <div className="rounded-lg bg-muted/50 px-3 py-2 mb-4 text-xs text-muted-foreground">
-        Your password and cookies never leave this device. Login happens in a
-        Render browser tab and the session stays inside Render; the sandbox never
-        sees Plane-2 credentials.
-        {spec.loginUrl ? (
-          <div className="mt-1 font-mono break-all text-[11px] opacity-80">
-            {spec.loginUrl}
-          </div>
-        ) : null}
+      {/* the trust moment — make the on-device guarantee unmissable */}
+      <div
+        className="flex gap-2 rounded-lg px-3 py-2 mb-4 text-xs"
+        style={{ background: "var(--bg-inset)", color: "var(--fg-subtle)" }}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--success)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="mt-px shrink-0" aria-hidden>
+          <path d="M8 1.8l5 2v3.3c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6V3.8z" />
+          <path d="M5.8 8.1l1.5 1.5 3-3.3" />
+        </svg>
+        <span>
+          Your password &amp; cookies <strong style={{ color: "var(--fg-muted)" }}>never leave this device</strong>.
+          Login happens in a Render browser tab and the session stays inside
+          Render; the sandbox never sees these credentials.
+          {spec.loginUrl ? (
+            <span className="block mt-1 font-mono break-all text-[11px] opacity-80">
+              {spec.loginUrl}
+            </span>
+          ) : null}
+        </span>
       </div>
 
       {phase === "idle" ? (
-        <button
-          type="button"
-          onClick={begin}
-          className="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:opacity-90"
-        >
-          Log in
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={begin}
+            className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium"
+            style={{ background: "var(--brand)", color: "var(--fg-onBrand)" }}
+          >
+            {spec.loginUrl ? "Sign in" : "Open sign-in page"}
+          </button>
+          <button
+            type="button"
+            onClick={cancel}
+            className="inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium"
+            style={{ color: "var(--fg-muted)", background: "var(--bg-overlay)" }}
+          >
+            Not now
+          </button>
+        </div>
       ) : (
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex items-center gap-3 text-sm" style={{ color: "var(--fg-muted)" }}>
           <span
             className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
             aria-hidden
           />
           <span>
-            Opening the login page in Render — complete the login there, then
+            Opening the sign-in page in Render — complete the login there, then
             ask me to retry.
           </span>
         </div>

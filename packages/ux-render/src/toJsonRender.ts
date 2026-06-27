@@ -7,6 +7,7 @@
 // FormMeta) so nothing is shared between concurrent surfaces.
 import type { Spec } from "@json-render/core";
 import type {
+  UxBlockSpec,
   UxConfirmSpec,
   UxFormField,
   UxFormSpec,
@@ -266,7 +267,7 @@ export function lowerForm(s: UxFormSpec): { spec: Spec; formMeta: FormMeta } {
   };
   elements.root = {
     type: "Card",
-    props: { title: s.title ? null : "Form", description: null, maxWidth: "full" },
+    props: { title: null, description: null, maxWidth: "full" },
     children: ["form"],
   };
   return { spec: { root: "root", state, elements }, formMeta: { fields: rawFields } };
@@ -330,7 +331,7 @@ export function lowerConfirm(s: UxConfirmSpec): Spec {
     const danger = s.danger && i === 0;
     elements[id] = {
       type: "Button",
-      props: { label: opt, variant: danger ? "destructive" : i === 0 ? "primary" : "secondary" },
+      props: { label: opt, variant: danger ? "danger" : i === 0 ? "primary" : "secondary" },
       on: { press: { action: UX_ACTIONS.confirm, params: { choice: opt } } },
     };
     btnIds.push(id);
@@ -349,10 +350,117 @@ export function lowerConfirm(s: UxConfirmSpec): Spec {
   };
   elements.root = {
     type: "Card",
-    props: { title: "Confirm", description: null, maxWidth: "full" },
+    props: { title: null, description: null, maxWidth: "full" },
     children: ["body"],
   };
   return { root: "root", state: {}, elements };
+}
+
+// ── block ──────────────────────────────────────────────────────────────────
+// A decision card: question + optional choice buttons (ux_confirm) + an optional
+// free-text steer field (ux_instruct). The instruction lives at /instruction so
+// the surface's mirror can read it when the human presses Send.
+export function lowerBlock(s: UxBlockSpec): Spec {
+  const elements: Record<string, El> = {};
+  const state: Record<string, unknown> = {};
+  const bodyChildren: string[] = [];
+
+  elements.q = {
+    type: "Text",
+    props: { text: String(s.question ?? "I need a decision."), variant: "lead" },
+  };
+  bodyChildren.push("q");
+
+  if (s.danger) {
+    elements.danger = {
+      type: "Alert",
+      props: {
+        title: "Sensitive decision",
+        message: "Please confirm you understand the impact before choosing.",
+        type: "warning",
+      },
+    };
+    bodyChildren.push("danger");
+  }
+
+  const options = Array.isArray(s.options) ? s.options : [];
+  if (options.length) {
+    const optIds: string[] = [];
+    options.forEach((opt, i) => {
+      const id = `bopt${i}`;
+      const label = opt.meta ? `${opt.label}  ·  ${opt.meta}` : opt.label;
+      const danger = s.danger && i === 0;
+      elements[id] = {
+        type: "Button",
+        props: {
+          label: String(label),
+          variant: danger ? "danger" : i === 0 ? "primary" : "secondary",
+        },
+        on: { press: { action: UX_ACTIONS.confirm, params: { choice: opt.label } } },
+      };
+      optIds.push(id);
+    });
+    elements.options = {
+      type: "Stack",
+      props: { direction: "vertical", gap: "sm" },
+      children: optIds,
+    };
+    bodyChildren.push("options");
+  }
+
+  const allowInstruction = s.allowInstruction !== false;
+  if (allowInstruction) {
+    if (options.length) {
+      elements.orsep = { type: "Separator", props: {} };
+      elements.orlabel = {
+        type: "Text",
+        props: { text: s.instructionLabel ?? "Or instruct further", variant: "caption" },
+      };
+      bodyChildren.push("orsep", "orlabel");
+    } else if (s.instructionLabel) {
+      elements.orlabel = {
+        type: "Text",
+        props: { text: s.instructionLabel, variant: "caption" },
+      };
+      bodyChildren.push("orlabel");
+    }
+
+    state.instruction = "";
+    elements.instruction = {
+      type: "Textarea",
+      props: {
+        label: null,
+        name: "instruction",
+        placeholder: s.instructionPlaceholder ?? "Tell the agent what to do instead…",
+        rows: 3,
+        value: { $bindState: "/instruction" } as never,
+        checks: null,
+      },
+    };
+    elements.sendBtn = {
+      type: "Button",
+      props: { label: String(s.submitLabel ?? "Send"), variant: options.length ? "secondary" : "primary" },
+      on: { press: { action: UX_ACTIONS.instruct } },
+    };
+    elements.sendRow = {
+      type: "Stack",
+      props: { direction: "horizontal", gap: "sm", justify: "end" },
+      children: ["sendBtn"],
+    };
+    bodyChildren.push("instruction", "sendRow");
+  }
+
+  elements.body = {
+    type: "Stack",
+    props: { direction: "vertical", gap: "md" },
+    children: bodyChildren,
+  };
+  elements.root = {
+    type: "Card",
+    props: { title: null, description: null, maxWidth: "full" },
+    children: ["body"],
+  };
+  return { root: "root", state, elements };
 }
 
 // ── value normalization ────────────────────────────────────────────────────

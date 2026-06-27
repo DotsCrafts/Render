@@ -10,6 +10,11 @@ function summarize(kind: UxKind, result: UxResult): string {
     }
     case "ux_confirm":
       return result.choice ? `Chose “${result.choice}”` : "Confirmed";
+    case "ux_instruct": {
+      const note = (result.instruction ?? "").trim();
+      const short = note.length > 60 ? `${note.slice(0, 60)}…` : note;
+      return short ? `Steered · “${short}”` : "Sent instruction";
+    }
     case "ux_cancel":
       return kind === "form" ? "Form cancelled" : "Cancelled";
     case "login_done":
@@ -30,11 +35,11 @@ export function ResolvedNote({
 }) {
   const cancelled = result.action === "ux_cancel" || result.action === "login_cancel";
   return (
-    <div className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm flex items-center gap-2">
-      <span className={cancelled ? "text-muted-foreground" : "text-emerald-500"}>
+    <div className="text-sm flex items-center gap-2" style={{ color: "var(--fg-muted)" }}>
+      <span style={{ color: cancelled ? "var(--fg-subtle)" : "var(--success)" }}>
         {cancelled ? "✕" : "✓"}
       </span>
-      <span className="text-muted-foreground">{summarize(kind, result)}</span>
+      <span>{summarize(kind, result)}</span>
     </div>
   );
 }

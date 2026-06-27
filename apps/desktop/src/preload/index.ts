@@ -26,8 +26,14 @@ const api: RenderApi = {
   tabClose: (tabId) => ipcRenderer.invoke(IPC.tabClose, tabId),
   tabActivate: (tabId) => ipcRenderer.invoke(IPC.tabActivate, tabId),
   setPanelWidth: (width) => ipcRenderer.invoke(IPC.setPanelWidth, width),
+  setPanelOpen: (open) => ipcRenderer.invoke(IPC.setPanelOpen, open),
   setOverlay: (hidden) => ipcRenderer.invoke(IPC.setOverlay, hidden),
   getState: () => ipcRenderer.invoke(IPC.getState),
+
+  savePage: (id: string) => ipcRenderer.invoke(IPC.savePage, id),
+  listPages: () => ipcRenderer.invoke(IPC.listPages),
+  openPage: (id: string) => ipcRenderer.invoke(IPC.openPage, id),
+  askPage: (id: string, instruction: string) => ipcRenderer.invoke(IPC.askPage, id, instruction),
 
   codexStatus: () => ipcRenderer.invoke(IPC.codexStatus),
   codexSetProvider: (p: CodexProviderConfig) => ipcRenderer.invoke(IPC.codexSetProvider, p),

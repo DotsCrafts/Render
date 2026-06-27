@@ -21,6 +21,7 @@ export const { registry } = defineRegistry(uxCatalog, {
     [UX_ACTIONS.submit]: noop,
     [UX_ACTIONS.confirm]: noop,
     [UX_ACTIONS.cancel]: noop,
+    [UX_ACTIONS.instruct]: noop,
     [UX_ACTIONS.loginDone]: noop,
   },
 });

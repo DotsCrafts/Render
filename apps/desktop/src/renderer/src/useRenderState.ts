@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentEvent, TabState, UxResult } from '@render/protocol';
+import type { AgentEvent, SavedPageMeta, TabState, UxResult } from '@render/protocol';
 
 export interface RenderState {
   tabs: TabState[];
@@ -25,6 +25,11 @@ export interface RenderState {
     back: () => void;
     forward: () => void;
     reload: () => void;
+    // saved render-pages (Delta 3)
+    savePage: (id: string) => Promise<void>;
+    listPages: () => Promise<SavedPageMeta[]>;
+    openPage: (id: string) => Promise<boolean>;
+    askPage: (id: string, instruction: string) => void;
   };
 }
 
@@ -108,6 +113,19 @@ export function useRenderState(): RenderState {
     if (id) void window.renderChrome.reload(id);
   }, []);
 
+  // saved render-pages (Delta 3): savePage flips a delivered page to saved; the
+  // gallery (listPages) shows those; openPage re-serves a saved spec into a tab;
+  // askPage pulls a page back into the conversation for a new version (Delta 5).
+  const savePage = useCallback(async (id: string) => {
+    await window.render.savePage(id);
+  }, []);
+  const listPages = useCallback(() => window.render.listPages(), []);
+  const openPage = useCallback((id: string) => window.render.openPage(id), []);
+  const askPage = useCallback(
+    (id: string, instruction: string) => void window.render.askPage(id, instruction),
+    [],
+  );
+
   return {
     tabs,
     activeTab,
@@ -125,6 +143,10 @@ export function useRenderState(): RenderState {
       back,
       forward,
       reload,
+      savePage,
+      listPages,
+      openPage,
+      askPage,
     },
   };
 }

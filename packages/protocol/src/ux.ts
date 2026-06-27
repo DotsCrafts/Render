@@ -10,7 +10,20 @@
  * so structure (not sanitization) is the injection boundary.
  */
 
-export type UxKind = 'render' | 'form' | 'confirm' | 'login';
+export type UxKind = 'render' | 'form' | 'confirm' | 'login' | 'block';
+
+/**
+ * A saved/savable render-page reference attached to a `render` result card. Set
+ * by the runtime when it serves a Tier-2 page (deliverPage) so the card's
+ * next-step row can offer Save / Ask-agent against the persisted spec.
+ */
+export interface UxPageRef {
+  /** persisted page id (userData/pages/<id>/v<n>.json) */
+  id: string;
+  title: string;
+  /** true once the human explicitly saved it to the Saved-Pages gallery */
+  saved?: boolean;
+}
 
 /** Discriminated envelope carried over IPC and through the event stream. */
 export interface UxMessage<K extends UxKind = UxKind> {
@@ -22,6 +35,8 @@ export interface UxMessage<K extends UxKind = UxKind> {
   spec: UxSpecFor<K>;
   /** optional: the codex itemId / server-request id this maps to */
   origin?: { threadId?: string; turnId?: string; itemId?: string; requestId?: number | string };
+  /** present on `render` cards that opened a savable Tier-2 page */
+  page?: UxPageRef;
   ts: number;
 }
 
@@ -31,7 +46,9 @@ export type UxSpecFor<K extends UxKind> = K extends 'render'
     ? UxFormSpec
     : K extends 'confirm'
       ? UxConfirmSpec
-      : UxLoginSpec;
+      : K extends 'block'
+        ? UxBlockSpec
+        : UxLoginSpec;
 
 // ── a. ux render — normal replies + structured results (non-blocking) ────────
 
@@ -103,6 +120,43 @@ export interface UxConfirmResult {
   choice?: string;
 }
 
+// ── c2. block — the agent is stuck / needs a decision; steer it inline ───────
+//
+// The missing core of surface (a): a card that says "I need a decision" with an
+// optional set of choices AND a free-text instruction field, so the human steers
+// the paused (or just-finished) turn from the card itself instead of the detached
+// global input. Choices route through ux_confirm (reusing the existing action);
+// the free-text steer routes through the 5th catalog action, ux_instruct.
+
+export interface UxBlockOption {
+  /** the choice the human picks; echoed back as UxBlockResult.choice */
+  label: string;
+  /** optional trailing meta, e.g. a price or ETA, shown right-aligned */
+  meta?: string;
+}
+export interface UxBlockSpec {
+  /** the decision the agent needs from the human */
+  question: string;
+  /** optional discrete choices; omit for an instruction-only block */
+  options?: UxBlockOption[];
+  /** show the free-text steer field (default: true) */
+  allowInstruction?: boolean;
+  /** label above the steer field */
+  instructionLabel?: string;
+  instructionPlaceholder?: string;
+  /** label for the steer send button (default: "Send") */
+  submitLabel?: string;
+  /** render the first choice as a destructive action + a caution note */
+  danger?: boolean;
+}
+export interface UxBlockResult {
+  action: 'ux_confirm' | 'ux_instruct' | 'ux_cancel';
+  /** set when the human picked one of `options` (action: ux_confirm) */
+  choice?: string;
+  /** set when the human typed a free-text steer (action: ux_instruct) */
+  instruction?: string;
+}
+
 // ── d. login — external auth via opencli login over the CDP human-hand ───────
 
 export interface UxLoginSpec {
@@ -121,12 +175,13 @@ export interface UxLoginResult {
   account?: string;
 }
 
-export type UxResult = UxFormResult | UxConfirmResult | UxLoginResult;
+export type UxResult = UxFormResult | UxConfirmResult | UxLoginResult | UxBlockResult;
 
 // Action names the @json-render catalog whitelists (no other actions allowed).
 export const UX_ACTION = {
   submit: 'ux_submit',
   confirm: 'ux_confirm',
   cancel: 'ux_cancel',
+  instruct: 'ux_instruct',
   loginDone: 'login_done',
 } as const;

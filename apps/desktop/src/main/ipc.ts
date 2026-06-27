@@ -20,6 +20,7 @@ import { CHROME_IPC } from '../shared/chrome-channels.js';
 import type { TabManager } from './tabs.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import type { CodexProvider } from './codex-provider.js';
+import type { PagesStore } from './pages-store.js';
 
 export interface IpcDeps {
   /** the chrome renderer that receives emit() events */
@@ -29,6 +30,8 @@ export interface IpcDeps {
   humanHand: HumanHandHandle;
   /** codex provider/auth manager (Phase A) */
   codex: CodexProvider;
+  /** saved render-pages store (Delta 3) */
+  pages: PagesStore;
 }
 
 export interface IpcBroker {
@@ -40,7 +43,7 @@ export interface IpcBroker {
 const MAX_EVENT_LOG = 500;
 
 export function registerIpc(deps: IpcDeps): IpcBroker {
-  const { chrome, tabs, agent, humanHand, codex } = deps;
+  const { chrome, tabs, agent, humanHand, codex, pages } = deps;
 
   // Durable event stream: the renderer holds events in React state, which is
   // wiped on any reload (HMR, crash, accidental navigation). Buffer them here in
@@ -71,8 +74,36 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.tabClose]: (_e, tabId: string) => tabs.close(tabId),
     [IPC.tabActivate]: (_e, tabId: string) => tabs.activate(tabId),
     [IPC.setPanelWidth]: (_e, width: number) => tabs.setPanelWidth(width),
+    [IPC.setPanelOpen]: (_e, open: boolean) => tabs.setPanelOpen(open),
     [IPC.setOverlay]: (_e, hidden: boolean) => tabs.setContentHidden(hidden),
     [IPC.getState]: () => ({ tabs: tabs.snapshot(), events: eventLog.slice() }),
+
+    // saved render-pages (Delta 3) — persist a spec, list the gallery, reopen live.
+    [IPC.savePage]: (_e, id: string) => pages.save(id),
+    [IPC.listPages]: () => pages.list(),
+    [IPC.openPage]: async (_e, id: string) => {
+      const page = pages.reopen(id);
+      if (!page) return false;
+      const url = await page.whenReady();
+      if (!url) {
+        page.dispose();
+        return false;
+      }
+      tabs.openUrl(url);
+      return true;
+    },
+    // Delta 5: pull a saved page back into the conversation, seeded with its spec,
+    // so the agent can emit a new version (render-page → v n+1).
+    [IPC.askPage]: (_e, id: string, instruction: string) => {
+      const rec = pages.get(id);
+      if (!rec) return;
+      const prompt =
+        `Modify this interactive page ("${rec.title}"). Here is its current ` +
+        `json-render spec:\n\n\`\`\`json\n${rec.specJson}\n\`\`\`\n\n` +
+        `Change requested: ${instruction.trim() || 'improve it'}\n\n` +
+        `Write the updated spec and re-run \`render-page\` (allow: ${rec.allow || 'none'}).`;
+      void agent.submit(prompt);
+    },
 
     // codex provider/auth — each mutation returns the fresh status so the
     // renderer re-renders. OAuth opens the auth URL in a Render tab (never the

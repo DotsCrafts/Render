@@ -1,10 +1,16 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
-import type { AgentEvent, UxResult } from '@render/protocol';
-import { AgentPanel as UxAgentPanel } from '@render/ux-render';
+import type { AgentEvent, UxMessage, UxResult } from '@render/protocol';
+import { AgentPanel as UxAgentPanel, type ResultAction } from '@render/ux-render';
 
 interface Props {
   events: AgentEvent[];
   onResolve: (id: string, result: UxResult) => void;
+  /** Delta 2: a next-step action fired from a result card. */
+  onResultAction?: (action: ResultAction, message: UxMessage) => void;
+  /** ids of pages the human has saved this session (marks the Save button done). */
+  savedPageIds?: Set<string>;
+  /** True while a turn is running — drives the panel's working/streaming state. */
+  busy?: boolean;
 }
 
 /**
@@ -13,11 +19,24 @@ interface Props {
  * dynamic UIs — tables, grids — aren't clipped). The drag updates the CSS var
  * immediately and tells main to re-inset the page views (throttled to rAF).
  */
-export function AgentPanel({ events, onResolve }: Props): ReactElement {
+export function AgentPanel({
+  events,
+  onResolve,
+  onResultAction,
+  savedPageIds,
+  busy,
+}: Props): ReactElement {
   return (
     <aside className="panel">
       <PanelResizeHandle />
-      <UxAgentPanel events={events} onResolve={onResolve} title="Agent" />
+      <UxAgentPanel
+        events={events}
+        onResolve={onResolve}
+        title="Agent"
+        busy={busy}
+        {...(onResultAction ? { onResultAction } : {})}
+        {...(savedPageIds ? { savedPageIds } : {})}
+      />
     </aside>
   );
 }

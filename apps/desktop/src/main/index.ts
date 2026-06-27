@@ -20,6 +20,7 @@ import { enableRenderCdp } from './cdp-port.js';
 import { registerRenderOpencliApp } from './opencli-render-app.js';
 import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
 import { createCodexProvider } from './codex-provider.js';
+import { createPagesStore } from './pages-store.js';
 import { startHomePortal } from './home-portal.js';
 import { installAppMenu } from './app-menu.js';
 import { ensureOpencliDaemon } from './opencli-daemon.js';
@@ -93,6 +94,16 @@ function wire(win: BrowserWindow): void {
   // from it instead of copying the user's ~/.codex.
   const codexProvider = createCodexProvider();
 
+  // Saved render-pages (Delta 3): persist delivered page specs under userData so
+  // they survive the conversation/app and can be reopened (re-served) live. The
+  // store re-serves via the SAME ux-server kernel the agent uses, under Render's
+  // bridge profile, so reopened pages drive the same logged-in session.
+  const pagesStore = createPagesStore({
+    userDataDir: app.getPath('userData'),
+    ...(bridgeProfile ? { profile: bridgeProfile } : {}),
+    now: () => Date.now(),
+  });
+
   // Brain: codex app-server runs in a SECOND sandbox owned by the runtime.
   const agent = createAgentRuntime({
     emit: (event) => broker.emitAgent(event),
@@ -113,6 +124,8 @@ function wire(win: BrowserWindow): void {
     opencliProfile: bridgeProfile,
     // prefer a Render-managed CODEX_HOME (provider + creds from settings).
     materializeCodexHome: () => codexProvider.materializeCodexHome(),
+    // Delta 3: persist each delivered Tier-2 page's spec so it can be saved/reopened.
+    persistPage: (input) => pagesStore.persist(input),
     now: () => Date.now(),
   });
 
@@ -122,6 +135,7 @@ function wire(win: BrowserWindow): void {
     agent,
     humanHand,
     codex: codexProvider,
+    pages: pagesStore,
   });
 
   // Serve opencli's /ext browser backend from Render's OWN Chromium (default ON;

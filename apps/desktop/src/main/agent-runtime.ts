@@ -25,9 +25,11 @@ import type {
   SandboxMode,
   SandboxProvider,
   TabGroupInfo,
+  UxBlockResult,
   UxKind,
   UxLoginResult,
   UxMessage,
+  UxPageRef,
   UxResult,
 } from '@render/protocol';
 import { prepareCodexHome, type CodexHome } from './codex-home.js';
@@ -106,6 +108,17 @@ export interface AgentRuntimeDeps {
    * runtime falls back to copying the user's ~/.codex.
    */
   materializeCodexHome?: () => Promise<CodexHome | null>;
+  /**
+   * Persist a delivered Tier-2 page's spec (Delta 3) so the human can Save it and
+   * reopen it later. Best-effort — returns the page id, or undefined when no store
+   * is wired. The page is PURE given spec + allowlist, so re-serving reproduces it.
+   */
+  persistPage?: (input: {
+    specJson: string;
+    title: string;
+    allow: string;
+    convId?: string;
+  }) => string | undefined;
 }
 
 interface PendingHitl {
@@ -121,6 +134,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   // sites we've already surfaced a login card for this turn, so a retry storm
   // of AUTH_REQUIRED commands doesn't spam duplicate login surfaces.
   const loginPrompted = new Set<string>();
+  // ux ids of block-decision cards, so resolveUx routes a choice/steer back into
+  // the conversation (steerTurn if live, else a fresh turn) instead of to codex.
+  const pendingBlock = new Set<string>();
   let session: AgentSession | null = null;
   let codexHome: CodexHome | null = null;
   let startPromise: Promise<void> | null = null;
@@ -176,6 +192,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       return;
     }
     deps.openTab?.(url);
+    // Delta 3: persist the spec so the human can Save + reopen it. The page is
+    // pure given spec + allowlist, so re-serving reproduces it (data refetched
+    // live). Best-effort — a persistence failure must not break the open.
+    let pageRef: UxPageRef | undefined;
+    try {
+      const pid = deps.persistPage?.({ specJson, title, allow: inv.allow ?? '' });
+      if (pid) pageRef = { id: pid, title };
+    } catch (err) {
+      console.warn('[agent-runtime] persistPage failed:', errText(err));
+    }
     deps.emit({
       kind: 'ux',
       message: {
@@ -183,6 +209,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         kind: 'render',
         blocking: false,
         ts: deps.now(),
+        ...(pageRef ? { page: pageRef } : {}),
         spec: {
           title: `Opened app: ${title}`,
           body: 'An interactive page is open in its own tab.',
@@ -300,7 +327,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
             (id ? (answerText.get(id) ?? '') : '');
           if (id) answerText.delete(id);
           if (text.trim()) {
-            deps.emit({ kind: 'ux', message: answerToUxMessage(text, `ux-ans-${++uxSeq}`, deps.now()) });
+            const message = answerToUxMessage(text, `ux-ans-${++uxSeq}`, deps.now());
+            // a ```block answer is a decision card — track it so resolveUx steers
+            // the conversation rather than routing the reply back to codex.
+            if (message.kind === 'block') pendingBlock.add(message.id);
+            deps.emit({ kind: 'ux', message });
           }
         }
         return; // never forward the raw agentMessage item to the feed
@@ -412,6 +443,18 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       resolveLogin(login.site, login.loginUrl, result as UxLoginResult);
       return;
     }
+    // Block-decision card: a picked option or a free-text steer both feed back
+    // into the conversation — steer the live turn, else start a fresh turn.
+    if (pendingBlock.has(id)) {
+      pendingBlock.delete(id);
+      const r = result as UxBlockResult;
+      if (r.action === 'ux_cancel') return;
+      const text = (r.action === 'ux_instruct' ? r.instruction : r.choice)?.trim();
+      if (!text) return;
+      if (session?.activeTurnId) await session.steer(text);
+      else await submit(text);
+      return;
+    }
     const hitl = pendingHitl.get(id);
     if (!hitl || !session) return; // unknown / already resolved
     pendingHitl.delete(id);
@@ -455,6 +498,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingHitl.clear();
     pendingLogin.clear();
     loginPrompted.clear();
+    pendingBlock.clear();
     // Allocate the next group; subsequent agent tabs (minted by the bridge) join
     // it. We don't open an initial tab — the active group is set for the next
     // agent action, matching the bridge's lazy mint-on-demand model.
@@ -465,6 +509,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingHitl.clear();
     pendingLogin.clear();
     loginPrompted.clear();
+    pendingBlock.clear();
     pages.forEach((p) => p.dispose());
     if (session) await session.dispose();
     if (codexHome) await codexHome.cleanup();

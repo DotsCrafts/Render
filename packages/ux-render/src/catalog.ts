@@ -17,6 +17,7 @@ export const UX_ACTIONS = {
   submit: "ux_submit",
   confirm: "ux_confirm",
   cancel: "ux_cancel",
+  instruct: "ux_instruct",
   loginDone: "login_done",
 } as const satisfies Record<string, UxResult["action"]>;
 
@@ -36,6 +37,13 @@ export const uxCatalog = defineCatalog(schema, {
     [UX_ACTIONS.cancel]: {
       params: z.object({}).passthrough(),
       description: "Cancel / dismiss without resolving values",
+    },
+    [UX_ACTIONS.instruct]: {
+      params: z
+        .object({ instruction: z.string().optional(), choice: z.string().optional() })
+        .passthrough(),
+      description:
+        "Steer the agent with a free-text instruction from a block-decision card",
     },
     [UX_ACTIONS.loginDone]: {
       params: z.object({ account: z.string().optional() }).passthrough(),

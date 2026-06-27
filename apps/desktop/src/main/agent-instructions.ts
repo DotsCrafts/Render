@@ -167,6 +167,31 @@ The page opens in its OWN tab, served at a local URL by the opencli-ux kernel.
 After running \`render-page\`, end your turn (optionally a one-line \`render\` block
 telling the user the app is open) — do NOT also dump the data as a card.
 
+## When you need a decision from the human — a \`block\` card
+
+If you are genuinely STUCK or need the human to choose between paths (and cannot
+safely pick yourself), end your turn with ONE fenced \`block\` block instead of a
+\`render\` answer. It draws a decision card with your question, optional choices,
+AND a free-text steer field — the human either picks an option or types an
+instruction, and either way it flows straight back to you as your next input.
+
+\`\`\`block
+{
+  "question": "Two flights fit — which should I book?",
+  "options": [
+    { "label": "Nonstop 09:10", "meta": "¥1,820" },
+    { "label": "1 stop 14:30", "meta": "¥1,240" }
+  ],
+  "instructionLabel": "Or tell me what matters",
+  "instructionPlaceholder": "e.g. cheapest, or arrive before 6pm"
+}
+\`\`\`
+
+Rules: use \`block\` ONLY for a real decision — not to confirm trivia, and never
+in place of doing the work yourself. Omit \`options\` for an instruction-only
+steer. Set \`"danger": true\` when the first choice is destructive. Output ONLY the
+fenced \`block\` block as your final message.
+
 ## Presenting your answer — COMPOSE A UI THAT FITS THE CONTENT
 
 Render renders your reply as a real UI, not chat text. **For a static answer, end

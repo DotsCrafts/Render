@@ -7,9 +7,20 @@
  * malformed, we gracefully wrap the prose as the card `body` so the user ALWAYS
  * gets a card, never raw text in the feed.
  */
-import type { UxMessage, UxRenderSpec, UxRenderItem } from '@render/protocol';
+import type {
+  UxBlockOption,
+  UxBlockSpec,
+  UxMessage,
+  UxRenderSpec,
+  UxRenderItem,
+} from '@render/protocol';
 
 const FENCE = /```(?:render|json)?\s*\n([\s\S]*?)```/gi;
+// A ```block fence lets the agent raise a block-decision card (Delta 1): a
+// question + optional choices + an inline free-text steer field. Scanned BEFORE
+// the render fence so a turn that needs a decision surfaces as a `block`, not a
+// terminal `render` card.
+const BLOCK_FENCE = /```block\s*\n([\s\S]*?)```/gi;
 
 /** Find the last ```render / ```json block that parses into a render-shaped object. */
 export function extractRenderSpec(text: string): UxRenderSpec | null {
@@ -87,8 +98,61 @@ function stripFences(text: string): string {
   return text.replace(FENCE, '').trim();
 }
 
-/** Build the ux render message for an agent answer (parsed spec or prose fallback). */
+/** Find the last ```block that parses into a {question}-shaped block spec. */
+export function extractBlockSpec(text: string): UxBlockSpec | null {
+  const blocks: string[] = [];
+  for (const m of text.matchAll(BLOCK_FENCE)) if (m[1]) blocks.push(m[1]);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const spec = coerceBlockSpec(blocks[i]);
+    if (spec) return spec;
+  }
+  return null;
+}
+
+function coerceBlockSpec(raw: string): UxBlockSpec | null {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object') return null;
+  const o = obj as Record<string, unknown>;
+  if (typeof o.question !== 'string' || !o.question.trim()) return null;
+  const spec: UxBlockSpec = { question: o.question };
+  if (Array.isArray(o.options)) {
+    const options = o.options.map(coerceBlockOption).filter(Boolean) as UxBlockOption[];
+    if (options.length) spec.options = options;
+  }
+  if (typeof o.allowInstruction === 'boolean') spec.allowInstruction = o.allowInstruction;
+  if (typeof o.instructionLabel === 'string') spec.instructionLabel = o.instructionLabel;
+  if (typeof o.instructionPlaceholder === 'string')
+    spec.instructionPlaceholder = o.instructionPlaceholder;
+  if (typeof o.submitLabel === 'string') spec.submitLabel = o.submitLabel;
+  if (typeof o.danger === 'boolean') spec.danger = o.danger;
+  return spec;
+}
+
+function coerceBlockOption(v: unknown): UxBlockOption | null {
+  if (typeof v === 'string') return v.trim() ? { label: v } : null;
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.label !== 'string' || !o.label.trim()) return null;
+  const opt: UxBlockOption = { label: o.label };
+  if (typeof o.meta === 'string' && o.meta.trim()) opt.meta = o.meta;
+  return opt;
+}
+
+/**
+ * Build the ux message for an agent answer. A ```block fence becomes a
+ * (non-blocking) block-decision card — the agent is asking the human to steer;
+ * otherwise the answer becomes a `render` card (parsed spec or prose fallback).
+ */
 export function answerToUxMessage(text: string, id: string, ts: number): UxMessage {
+  const block = extractBlockSpec(text);
+  if (block) {
+    return { id, kind: 'block', blocking: false, ts, spec: block };
+  }
   const parsed = extractRenderSpec(text);
   const spec: UxRenderSpec = parsed ?? { body: stripFences(text) || text.trim() };
   return { id, kind: 'render', blocking: false, ts, spec };

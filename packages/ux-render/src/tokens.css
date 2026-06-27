@@ -1,0 +1,248 @@
+/* ============================================================
+   RENDER · UNIFIED DESIGN TOKENS
+   One set shared by the window chrome (apps/desktop renderer) and
+   the agent panel (this package). Dark is the default (:root); light
+   applies under `.light` or `prefers-color-scheme: light`.
+
+   This file is the single source of truth. It is @import-ed by
+   ux-render's styles.css, which the desktop renderer loads first —
+   so the chrome stylesheet consumes these same :root vars without
+   redefining them. Edit values HERE only.
+   ============================================================ */
+
+:root {
+  /* — elevation: backgrounds, deepest → highest — */
+  --bg-canvas: oklch(0.165 0.006 264); /* the web stage / page well */
+  --bg-base: oklch(0.192 0.007 264); /* app window body */
+  --bg-surface: oklch(0.213 0.008 264); /* agent panel, sidebars */
+  --bg-raised: oklch(0.246 0.009 264); /* cards, popovers */
+  --bg-overlay: oklch(0.285 0.01 264); /* menus, tooltips */
+  --bg-inset: oklch(0.142 0.006 264); /* inputs, wells, code */
+  --bg-hover: oklch(1 0 0 / 0.04);
+  --bg-active: oklch(1 0 0 / 0.07);
+
+  /* — foreground — */
+  --fg: oklch(0.965 0.004 264);
+  --fg-muted: oklch(0.745 0.008 264);
+  --fg-subtle: oklch(0.598 0.009 264);
+  --fg-faint: oklch(0.468 0.009 264);
+  --fg-onBrand: oklch(0.99 0.01 280);
+
+  /* — borders / lines — */
+  --border: oklch(1 0 0 / 0.075);
+  --border-strong: oklch(1 0 0 / 0.135);
+  --border-faint: oklch(1 0 0 / 0.045);
+
+  /* — brand (identity, focus, active) — */
+  --brand: oklch(0.625 0.175 274);
+  --brand-hover: oklch(0.668 0.178 274);
+  --brand-press: oklch(0.582 0.165 274);
+  --brand-tint: oklch(0.625 0.175 274 / 0.14);
+  --brand-line: oklch(0.625 0.175 274 / 0.4);
+  --accent-2: oklch(0.76 0.095 215); /* secondary: links, info */
+  --accent-2-tint: oklch(0.76 0.095 215 / 0.14);
+
+  /* — semantic (the agent vocabulary) — */
+  --agent: oklch(0.715 0.165 305); /* reasoning / agent turns */
+  --agent-tint: oklch(0.715 0.165 305 / 0.14);
+  --human: oklch(0.705 0.135 244); /* the user's prompts */
+  --human-tint: oklch(0.705 0.135 244 / 0.14);
+  --command: oklch(0.745 0.15 158); /* CLI / tool / sandbox */
+  --command-tint: oklch(0.745 0.15 158 / 0.14);
+  --danger: oklch(0.64 0.205 25); /* destructive / down */
+  --danger-tint: oklch(0.64 0.205 25 / 0.15);
+  --warning: oklch(0.79 0.14 78);
+  --warning-tint: oklch(0.79 0.14 78 / 0.15);
+  --success: oklch(0.725 0.155 152); /* up / confirmed */
+  --success-tint: oklch(0.725 0.155 152 / 0.15);
+
+  /* — radius — */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* — type — */
+  --font-ui: "Geist", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --fs-micro: 11px;
+  --fs-mini: 12px;
+  --fs-ui: 13px;
+  --fs-body: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 26px;
+  --fs-3xl: 34px;
+  --fs-display: 46px;
+
+  /* — spacing (4px rhythm) — */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* — shadows — */
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-card: 0 1px 0 oklch(1 0 0 / 0.03) inset, 0 2px 8px oklch(0 0 0 / 0.35);
+  --shadow-pop: 0 8px 28px oklch(0 0 0 / 0.5), 0 1px 0 oklch(1 0 0 / 0.05) inset;
+  --shadow-pill: 0 6px 24px oklch(0 0 0 / 0.45), 0 0 0 1px oklch(1 0 0 / 0.06);
+  --shadow-win: 0 32px 80px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(1 0 0 / 0.07);
+}
+
+/* ============================  LIGHT  ============================ */
+:root.light,
+.light {
+  --bg-canvas: oklch(0.995 0.001 264);
+  --bg-base: oklch(0.975 0.002 264);
+  --bg-surface: oklch(1 0 0);
+  --bg-raised: oklch(0.992 0.002 264);
+  --bg-overlay: oklch(1 0 0);
+  --bg-inset: oklch(0.958 0.004 264);
+  --bg-hover: oklch(0 0 0 / 0.035);
+  --bg-active: oklch(0 0 0 / 0.06);
+
+  --fg: oklch(0.235 0.012 264);
+  --fg-muted: oklch(0.455 0.012 264);
+  --fg-subtle: oklch(0.58 0.012 264);
+  --fg-faint: oklch(0.68 0.01 264);
+  --fg-onBrand: oklch(0.99 0.01 280);
+
+  --border: oklch(0.2 0.02 264 / 0.12);
+  --border-strong: oklch(0.2 0.02 264 / 0.2);
+  --border-faint: oklch(0.2 0.02 264 / 0.07);
+
+  --brand: oklch(0.545 0.19 274);
+  --brand-hover: oklch(0.5 0.19 274);
+  --brand-press: oklch(0.47 0.18 274);
+  --brand-tint: oklch(0.545 0.19 274 / 0.1);
+  --brand-line: oklch(0.545 0.19 274 / 0.35);
+  --accent-2: oklch(0.56 0.11 230);
+  --accent-2-tint: oklch(0.56 0.11 230 / 0.1);
+
+  --agent: oklch(0.56 0.19 305);
+  --agent-tint: oklch(0.56 0.19 305 / 0.1);
+  --human: oklch(0.54 0.165 250);
+  --human-tint: oklch(0.54 0.165 250 / 0.1);
+  --command: oklch(0.56 0.14 158);
+  --command-tint: oklch(0.56 0.14 158 / 0.1);
+  --danger: oklch(0.56 0.205 27);
+  --danger-tint: oklch(0.56 0.205 27 / 0.1);
+  --warning: oklch(0.64 0.15 70);
+  --warning-tint: oklch(0.64 0.15 70 / 0.12);
+  --success: oklch(0.56 0.15 150);
+  --success-tint: oklch(0.56 0.15 150 / 0.12);
+
+  --shadow-sm: 0 1px 2px oklch(0.2 0.02 264 / 0.1);
+  --shadow-card: 0 1px 2px oklch(0.2 0.02 264 / 0.06), 0 1px 0 oklch(1 0 0 / 0.6) inset;
+  --shadow-pop: 0 12px 32px oklch(0.2 0.02 264 / 0.16);
+  --shadow-pill: 0 8px 28px oklch(0.2 0.02 264 / 0.16), 0 0 0 1px oklch(0.2 0.02 264 / 0.08);
+  --shadow-win: 0 32px 80px oklch(0.2 0.02 264 / 0.2), 0 0 0 1px oklch(0.2 0.02 264 / 0.1);
+}
+
+/* OS preference drives light unless an explicit `.dark` ancestor pins dark. */
+@media (prefers-color-scheme: light) {
+  :root:not(.dark) {
+    --bg-canvas: oklch(0.995 0.001 264);
+    --bg-base: oklch(0.975 0.002 264);
+    --bg-surface: oklch(1 0 0);
+    --bg-raised: oklch(0.992 0.002 264);
+    --bg-overlay: oklch(1 0 0);
+    --bg-inset: oklch(0.958 0.004 264);
+    --bg-hover: oklch(0 0 0 / 0.035);
+    --bg-active: oklch(0 0 0 / 0.06);
+
+    --fg: oklch(0.235 0.012 264);
+    --fg-muted: oklch(0.455 0.012 264);
+    --fg-subtle: oklch(0.58 0.012 264);
+    --fg-faint: oklch(0.68 0.01 264);
+
+    --border: oklch(0.2 0.02 264 / 0.12);
+    --border-strong: oklch(0.2 0.02 264 / 0.2);
+    --border-faint: oklch(0.2 0.02 264 / 0.07);
+
+    --brand: oklch(0.545 0.19 274);
+    --brand-hover: oklch(0.5 0.19 274);
+    --brand-press: oklch(0.47 0.18 274);
+    --brand-tint: oklch(0.545 0.19 274 / 0.1);
+    --brand-line: oklch(0.545 0.19 274 / 0.35);
+    --accent-2: oklch(0.56 0.11 230);
+    --accent-2-tint: oklch(0.56 0.11 230 / 0.1);
+
+    --agent: oklch(0.56 0.19 305);
+    --agent-tint: oklch(0.56 0.19 305 / 0.1);
+    --human: oklch(0.54 0.165 250);
+    --human-tint: oklch(0.54 0.165 250 / 0.1);
+    --command: oklch(0.56 0.14 158);
+    --command-tint: oklch(0.56 0.14 158 / 0.1);
+    --danger: oklch(0.56 0.205 27);
+    --danger-tint: oklch(0.56 0.205 27 / 0.1);
+    --warning: oklch(0.64 0.15 70);
+    --warning-tint: oklch(0.64 0.15 70 / 0.12);
+    --success: oklch(0.56 0.15 150);
+    --success-tint: oklch(0.56 0.15 150 / 0.12);
+
+    --shadow-sm: 0 1px 2px oklch(0.2 0.02 264 / 0.1);
+    --shadow-card: 0 1px 2px oklch(0.2 0.02 264 / 0.06), 0 1px 0 oklch(1 0 0 / 0.6) inset;
+    --shadow-pop: 0 12px 32px oklch(0.2 0.02 264 / 0.16);
+    --shadow-pill: 0 8px 28px oklch(0.2 0.02 264 / 0.16), 0 0 0 1px oklch(0.2 0.02 264 / 0.08);
+    --shadow-win: 0 32px 80px oklch(0.2 0.02 264 / 0.2), 0 0 0 1px oklch(0.2 0.02 264 / 0.1);
+  }
+}
+
+/* — animation keyframes used by the panel (streaming, pulse, sweep, …) — */
+@keyframes rd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes rd-shimmer {
+  100% {
+    background-position: -200% 0;
+  }
+}
+@keyframes rd-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+@keyframes rd-typing {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+@keyframes rd-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes rd-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
