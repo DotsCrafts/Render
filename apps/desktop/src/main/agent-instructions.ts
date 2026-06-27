@@ -132,7 +132,31 @@ boundary (you cannot emit code, only a validated spec). Available components:
   \`Badge\`, \`Table\`, \`Tabs\`, \`Input\`, \`Select\`, \`Link\`, …
 - live-data templates (prefer these for dashboards/feeds): \`PortalShell\` (page
   frame), \`MetricGrid\` (grid of metric tiles), \`FeedList\` (titled list),
-  \`WeatherPanel\`, \`SearchPanel\` (search box).
+  \`WeatherPanel\`, \`SearchPanel\` (search box), \`Map\` (pinned geographic map).
+
+**PLACES / locations → render a \`Map\`, not a list.** When the results are
+physical places (restaurants, cafés, shops, bars, hotels, POIs — anything with a
+street address), show them on a \`Map\` so the human sees WHERE they are. Use
+\`opencli amap search\` for the coordinates — amap returns flat \`lat\`/\`lng\`
+(GCJ-02) that the \`Map\` plots directly (no conversion). The \`Map\` binds
+\`on.mount → ux_data\` exactly like the other live-data templates:
+
+       "places": {
+         "type": "Map",
+         "props": { "title": "附近的咖啡店", "source": "amap search",
+                    "status": {"$state":"/status/places"},
+                    "errorText": {"$state":"/error/places"},
+                    "data": {"$state":"/data/places"} },
+         "on": { "mount": { "action": "ux_data", "params": { "key": "places",
+                 "request": { "site":"amap", "command":"search",
+                              "positional":["咖啡"], "args":{ "city":"上海" } } } } }
+       }
+
+  amap rows already carry \`lat\`/\`lng\`/\`name\`/\`rating\`/\`address\`, so the default
+  field mapping just works (override with \`latPath\`/\`lngPath\`/\`titlePath\` only if a
+  different source is used). Allow it with \`--allow "amap search"\`. Keep using
+  \`dianping\` for rich detail (reviews, price) and \`amap\` for coordinates — you can
+  pair a \`Map\` with a \`FeedList\`.
 
 Steps:
 1. Write a spec JSON file to your workdir, e.g. \`app.json\`.
