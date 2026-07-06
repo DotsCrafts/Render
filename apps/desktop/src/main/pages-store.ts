@@ -19,17 +19,26 @@ import { serveUxSpec, type UxPage } from './ux-server.js';
 
 export interface PagesStore {
   /** Persist a freshly-served page spec as a draft; returns its new id. */
-  persist(input: { specJson: string; title: string; allow: string; convId?: string }): string;
+  persist(input: {
+    specJson: string;
+    title: string;
+    allow: string;
+    allowWrite?: string;
+    convId?: string;
+  }): string;
   /** Flip a page to saved:true (shows in the gallery). Returns its meta or null. */
   save(id: string): SavedPageMeta | null;
   /** Append a new version of an existing page (Delta 5 regeneration). */
-  addVersion(id: string, input: { specJson: string; title?: string; allow?: string }): SavedPageMeta | null;
+  addVersion(
+    id: string,
+    input: { specJson: string; title?: string; allow?: string; allowWrite?: string },
+  ): SavedPageMeta | null;
   /** The saved pages (saved:true), newest-first — the gallery's data. */
   list(): SavedPageMeta[];
   /** The newest version record for a page, or null. */
   get(id: string): SavedPageRecord | null;
   /** Re-serve a page's newest spec via the ux-server and return the UxPage. */
-  reopen(id: string): UxPage | null;
+  reopen(id: string): Promise<UxPage | null>;
 }
 
 interface StoreOpts {
@@ -37,6 +46,19 @@ interface StoreOpts {
   userDataDir: string;
   /** OPENCLI_PROFILE the re-served ux server runs under (Render's bridge profile) */
   profile?: string;
+  /**
+   * Serve a page with the runtime's full write-path wiring (spec-guard, write
+   * confirm broker, callback→conversation forwarding). Wired by index.ts to
+   * agent.servePage so reopened pages round-trip exactly like fresh ones. When
+   * absent, reopen falls back to a bare serveUxSpec — pages still render, page
+   * actions go nowhere, and the kernel fail-closes all writes (no broker).
+   */
+  serve?: (input: {
+    specJson: string;
+    title?: string;
+    allow?: string;
+    allowWrite?: string;
+  }) => Promise<UxPage>;
   now: () => number;
 }
 
@@ -87,6 +109,7 @@ export function createPagesStore(opts: StoreOpts): PagesStore {
     version: rec.version,
     savedAt: rec.savedAt,
     allow: rec.allow,
+    ...(rec.allowWrite ? { allowWrite: rec.allowWrite } : {}),
     ...(rec.convId ? { convId: rec.convId } : {}),
   });
 
@@ -104,6 +127,7 @@ export function createPagesStore(opts: StoreOpts): PagesStore {
       title: input.title,
       specJson: input.specJson,
       allow: input.allow,
+      ...(input.allowWrite ? { allowWrite: input.allowWrite } : {}),
       ...(input.convId ? { convId: input.convId } : {}),
       version: 1,
       savedAt: opts.now(),
@@ -128,6 +152,7 @@ export function createPagesStore(opts: StoreOpts): PagesStore {
       specJson: input.specJson,
       ...(input.title ? { title: input.title } : {}),
       ...(input.allow !== undefined ? { allow: input.allow } : {}),
+      ...(input.allowWrite !== undefined ? { allowWrite: input.allowWrite } : {}),
       version: rec.version + 1,
       savedAt: opts.now(),
     };
@@ -147,12 +172,28 @@ export function createPagesStore(opts: StoreOpts): PagesStore {
       .map(toMeta);
   };
 
-  const reopen: PagesStore['reopen'] = (id) => {
+  const reopen: PagesStore['reopen'] = async (id) => {
     const rec = get(id);
     if (!rec) return null;
+    // Prefer the runtime-wired serve (write broker + callback forwarding) so a
+    // reopened page behaves exactly like a freshly delivered one.
+    if (opts.serve) {
+      try {
+        return await opts.serve({
+          specJson: rec.specJson,
+          title: rec.title,
+          allow: rec.allow,
+          ...(rec.allowWrite ? { allowWrite: rec.allowWrite } : {}),
+        });
+      } catch (err) {
+        console.warn('[pages-store] runtime serve rejected the saved spec:', String(err));
+        return null;
+      }
+    }
     return serveUxSpec({
       specJson: rec.specJson,
       allow: rec.allow,
+      ...(rec.allowWrite ? { allowWrite: rec.allowWrite } : {}),
       idTag: `reopen-${id}-${opts.now()}`,
       ...(opts.profile ? { profile: opts.profile } : {}),
     });

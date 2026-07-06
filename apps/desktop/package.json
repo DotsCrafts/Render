@@ -17,6 +17,7 @@
     "proof": "tsx src/main/journey-proof.ts",
     "test:nav": "electron-vite build && node test/nav-guard.e2e.mjs",
     "test:cdp": "electron-vite build && node test/cdp-opencli.e2e.mjs",
+    "test:unit": "tsx --test test/unit/genpage-write.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "package": "electron-vite build && electron-builder --publish never",
     "package:mac": "electron-vite build && electron-builder --mac --publish never",

@@ -82,7 +82,7 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.savePage]: (_e, id: string) => pages.save(id),
     [IPC.listPages]: () => pages.list(),
     [IPC.openPage]: async (_e, id: string) => {
-      const page = pages.reopen(id);
+      const page = await pages.reopen(id);
       if (!page) return false;
       const url = await page.whenReady();
       if (!url) {
@@ -101,7 +101,8 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
         `Modify this interactive page ("${rec.title}"). Here is its current ` +
         `json-render spec:\n\n\`\`\`json\n${rec.specJson}\n\`\`\`\n\n` +
         `Change requested: ${instruction.trim() || 'improve it'}\n\n` +
-        `Write the updated spec and re-run \`render-page\` (allow: ${rec.allow || 'none'}).`;
+        `Write the updated spec and re-run \`render-page\` (allow: ${rec.allow || 'none'}` +
+        `${rec.allowWrite ? `; allow-write: ${rec.allowWrite}` : ''}).`;
       void agent.submit(prompt);
     },
 

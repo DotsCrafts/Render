@@ -53,6 +53,7 @@ Render inverts the model:
 ### Security model
 
 - **Structure is the injection boundary.** Generated pages are json-render *specs*, not HTML/JS: the LLM can only reference whitelisted components and five actions (`ux_submit / confirm / cancel / instruct / login_done`). A hostile page spec cannot execute code.
+- **Page writes are granted per command and confirmed per invocation.** A generated page reads through the token-gated `/ux/data` allowlist (`--allow`); anything mutating needs an explicit per-command `--allow-write` grant AND a human "允许" in Render for every single run (`ux-confirm-broker`); no broker ⇒ writes fail closed. Page actions (`ux_submit`/`ux_confirm`) don't run anything themselves — they round-trip to the agent as its next turn, where normal HITL applies.
 - **Credentials never enter the sandbox.** Logins happen in real tabs inside Render's own session partition; the agent only learns "login done, retry."
 - **Iron rule: Render never drives, opens, or closes your system Chrome.** All browser-hand traffic targets Render's embedded Chromium under a dedicated opencli profile.
 - **HITL before anything sensitive.** Command escalations, payments-shaped confirmations, and logins block on explicit user decisions.

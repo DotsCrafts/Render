@@ -35,7 +35,9 @@ import type {
 import { prepareCodexHome, type CodexHome } from './codex-home.js';
 import { parseOpencliCommand } from './opencli-command.js';
 import { opencliResultToUx } from './opencli-to-ux.js';
-import { uxResultToCodexReply } from './ux-reply.js';
+import { uxConfirmAllows, uxResultToCodexReply } from './ux-reply.js';
+import { createUxConfirmBroker, type UxWriteRequest } from './ux-confirm-broker.js';
+import { guardPageSpec } from './spec-guard.js';
 import {
   RENDER_AGENTS_MD,
   writeAgentsMd,
@@ -49,11 +51,35 @@ import { detectOpencliAuthNeed } from './opencli-auth.js';
 import { createConversationGroups, type ConversationGroups } from './conversation-groups.js';
 import { serveUxSpec, type UxPage } from './ux-server.js';
 
+/** Input to servePage — a spec plus its server-owned grants. */
+export interface ServePageInput {
+  specJson: string;
+  title?: string;
+  /** read allowlist "<site> <command>,…" (ux render --allow) */
+  allow?: string;
+  /** per-command write grants "<site> <command>,…" — each run human-confirmed */
+  allowWrite?: string;
+}
+
 export interface AgentRuntime {
   submit(text: string): Promise<{ turnId: string }>;
   steer(text: string): Promise<void>;
   cancel(): Promise<void>;
   resolveUx(id: string, result: UxResult): Promise<void>;
+  /**
+   * Serve a generated page through the opencli-ux kernel with the runtime's
+   * full write-path wiring: spec-guard, write-confirm broker, and keep-mode
+   * callback forwarding (page actions → the conversation). Used by deliverPage
+   * (the agent's `render-page`), the saved-pages reopen path, and the journey
+   * proof. Throws when the spec fails the guard.
+   */
+  servePage(input: ServePageInput): Promise<UxPage>;
+  /**
+   * Forward a page action (a keep-mode /ux/callback payload) into the
+   * conversation — steer the live turn, else start a fresh one. Exposed so
+   * pages served outside deliverPage (reopened saved pages) round-trip too.
+   */
+  forwardPageAction(title: string | undefined, payload: unknown): Promise<void>;
   /**
    * The CURRENT conversation's browser tab group — read by the opencli bridge at
    * tab-mint time so agent tabs join the active conversation's group.
@@ -117,6 +143,7 @@ export interface AgentRuntimeDeps {
     specJson: string;
     title: string;
     allow: string;
+    allowWrite?: string;
     convId?: string;
   }) => string | undefined;
 }
@@ -137,6 +164,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   // ux ids of block-decision cards, so resolveUx routes a choice/steer back into
   // the conversation (steerTurn if live, else a fresh turn) instead of to codex.
   const pendingBlock = new Set<string>();
+  // ux ids of generated-page WRITE confirms (ux-confirm-broker): resolveUx feeds
+  // the human's verdict straight back to the kernel, not to codex.
+  const pendingWrite = new Map<string, (allow: boolean) => void>();
+  // ux-server session → page title, so a broker request names the asking page.
+  const pageTitles = new Map<string, string>();
   let session: AgentSession | null = null;
   let codexHome: CodexHome | null = null;
   let startPromise: Promise<void> | null = null;
@@ -152,13 +184,101 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   let pageSeq = 0;
   const pages: UxPage[] = [];
 
+  // The Render-side confirm surface for generated-page WRITES: the kernel POSTs
+  // each write-granted invocation here; we surface a blocking confirm card and
+  // resolve with the human's choice (resolveUx → pendingWrite). Lazy — only
+  // pages served with write grants ever start it.
+  const confirmBroker = createUxConfirmBroker({
+    requestConfirm: (req: UxWriteRequest) =>
+      new Promise<boolean>((resolve) => {
+        const id = `ux-write-${++uxSeq}`;
+        pendingWrite.set(id, resolve);
+        const pageTitle = req.session ? pageTitles.get(req.session) : undefined;
+        const detail = [
+          Array.isArray(req.positional) && req.positional.length
+            ? `positional: ${JSON.stringify(req.positional)}`
+            : '',
+          req.args && Object.keys(req.args).length ? `args: ${JSON.stringify(req.args, null, 2)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+        deps.emit({
+          kind: 'ux',
+          message: {
+            id,
+            kind: 'confirm',
+            blocking: true,
+            ts: deps.now(),
+            spec: {
+              message: `${pageTitle ? `页面 "${pageTitle}"` : 'A generated page'} wants to run a WRITE command: opencli ${req.site} ${req.command}`,
+              ...(detail ? { detail } : {}),
+              options: ['允许', '拒绝'],
+              danger: true,
+            },
+          },
+        });
+      }),
+  });
+
+  /**
+   * Forward a page action (keep-mode /ux/callback payload) into the
+   * conversation: steer the live turn, else start a fresh one — the same
+   * pattern as block-decision cards. ux_cancel / unknown payloads are dropped.
+   */
+  const forwardPageAction = async (title: string | undefined, payload: unknown): Promise<void> => {
+    const text = pageActionToPrompt(title, payload);
+    if (!text) return;
+    try {
+      if (session?.activeTurnId) await session.steer(text);
+      else await submit(text);
+    } catch (err) {
+      deps.emit({ kind: 'error', message: `page action forward failed: ${errText(err)}` });
+    }
+  };
+
+  /**
+   * Serve a page spec through the opencli-ux kernel with the full write-path
+   * wiring: deliver-time spec-guard, the write-confirm broker (only when write
+   * grants exist), and keep-mode callback forwarding back into the conversation.
+   */
+  const servePage = async (input: ServePageInput): Promise<UxPage> => {
+    const guard = guardPageSpec(input.specJson, {
+      ...(input.allow !== undefined ? { allow: input.allow } : {}),
+      ...(input.allowWrite !== undefined ? { allowWrite: input.allowWrite } : {}),
+    });
+    if (!guard.ok) throw new Error(`spec rejected — ${guard.errors.join('; ')}`);
+    const title = input.title?.trim() || 'App';
+    // writes are brokered per invocation; a page without grants never binds the broker
+    const confirm = input.allowWrite?.trim() ? await confirmBroker.endpoint() : null;
+    const page = serveUxSpec({
+      specJson: input.specJson,
+      allow: input.allow ?? '',
+      ...(input.allowWrite ? { allowWrite: input.allowWrite } : {}),
+      ...(confirm ? { confirm } : {}),
+      onCallback: (payload) => void forwardPageAction(title, payload),
+      idTag: `${++pageSeq}-${deps.now()}`,
+      ...(deps.opencliProfile ? { profile: deps.opencliProfile } : {}),
+    });
+    pages.push(page);
+    void page.whenReady().then(() => {
+      if (page.session) pageTitles.set(page.session, title);
+    });
+    return page;
+  };
+
   /**
    * Read the json-render spec the agent wrote (inside the sandbox), serve it via
    * the opencli-ux kernel (`ux render`), and open the served URL in a tab — then
    * drop a reference card. No isolated partition / artifact bridge: the page is a
-   * real localhost app whose only backend reach is the ux server's /ux/data.
+   * real localhost app whose only backend reach is the ux server's token-gated
+   * /ux/data (reads via --allow, human-confirmed writes via --allow-write).
    */
-  const deliverPage = async (inv: { file: string; title?: string; allow?: string }): Promise<void> => {
+  const deliverPage = async (inv: {
+    file: string;
+    title?: string;
+    allow?: string;
+    allowWrite?: string;
+  }): Promise<void> => {
     let specJson: string;
     try {
       const res = await deps.sandbox.exec('cat', [inv.file], { cwd: deps.sandbox.workdir() });
@@ -171,21 +291,20 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       deps.emit({ kind: 'error', message: `render-page: ${errText(err)}` });
       return;
     }
-    try {
-      JSON.parse(specJson);
-    } catch (err) {
-      deps.emit({ kind: 'error', message: `render-page: spec is not valid JSON — ${errText(err)}` });
-      return;
-    }
 
     const title = inv.title?.trim() || 'App';
-    const page = serveUxSpec({
-      specJson,
-      allow: inv.allow ?? '',
-      idTag: `${++pageSeq}-${deps.now()}`,
-      ...(deps.opencliProfile ? { profile: deps.opencliProfile } : {}),
-    });
-    pages.push(page);
+    let page: UxPage;
+    try {
+      page = await servePage({
+        specJson,
+        title,
+        ...(inv.allow !== undefined ? { allow: inv.allow } : {}),
+        ...(inv.allowWrite !== undefined ? { allowWrite: inv.allowWrite } : {}),
+      });
+    } catch (err) {
+      deps.emit({ kind: 'error', message: `render-page: ${errText(err)}` });
+      return;
+    }
     const url = await page.whenReady();
     if (!url) {
       deps.emit({ kind: 'error', message: `render-page: ux server failed to start for "${title}"` });
@@ -193,11 +312,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     }
     deps.openTab?.(url);
     // Delta 3: persist the spec so the human can Save + reopen it. The page is
-    // pure given spec + allowlist, so re-serving reproduces it (data refetched
+    // pure given spec + grants, so re-serving reproduces it (data refetched
     // live). Best-effort — a persistence failure must not break the open.
     let pageRef: UxPageRef | undefined;
     try {
-      const pid = deps.persistPage?.({ specJson, title, allow: inv.allow ?? '' });
+      const pid = deps.persistPage?.({
+        specJson,
+        title,
+        allow: inv.allow ?? '',
+        ...(inv.allowWrite ? { allowWrite: inv.allowWrite } : {}),
+      });
       if (pid) pageRef = { id: pid, title };
     } catch (err) {
       console.warn('[agent-runtime] persistPage failed:', errText(err));
@@ -437,6 +561,14 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 
   const resolveUx = async (id: string, result: UxResult): Promise<void> => {
+    // Generated-page write confirm: the verdict goes straight back to the
+    // ux-confirm-broker (the kernel is holding the /ux/data call open).
+    const write = pendingWrite.get(id);
+    if (write) {
+      pendingWrite.delete(id);
+      write(uxConfirmAllows(result));
+      return;
+    }
     const login = pendingLogin.get(id);
     if (login) {
       pendingLogin.delete(id);
@@ -499,6 +631,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingLogin.clear();
     loginPrompted.clear();
     pendingBlock.clear();
+    // Unblock any kernel still holding a write /ux/data open — deny is the
+    // only safe answer once its confirm card's conversation is gone.
+    pendingWrite.forEach((resolve) => resolve(false));
+    pendingWrite.clear();
     // Allocate the next group; subsequent agent tabs (minted by the bridge) join
     // it. We don't open an initial tab — the active group is set for the next
     // agent action, matching the bridge's lazy mint-on-demand model.
@@ -510,7 +646,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingLogin.clear();
     loginPrompted.clear();
     pendingBlock.clear();
+    pendingWrite.forEach((resolve) => resolve(false));
+    pendingWrite.clear();
     pages.forEach((p) => p.dispose());
+    confirmBroker.dispose();
     if (session) await session.dispose();
     if (codexHome) await codexHome.cleanup();
   };
@@ -520,10 +659,37 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     steer,
     cancel,
     resolveUx,
+    servePage,
+    forwardPageAction,
     activeGroup,
     newConversation,
     dispose,
   };
+}
+
+/**
+ * Render a page action (a keep-mode /ux/callback payload) as the agent's next
+ * input. Only ux_submit / ux_confirm round-trip — ux_cancel and unrecognized
+ * payloads are dropped (the page dismissing itself is not an instruction).
+ */
+export function pageActionToPrompt(title: string | undefined, payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const p = payload as { action?: unknown; values?: unknown; choice?: unknown };
+  const label = title ? `"${title}"` : 'a generated page';
+  if (p.action === 'ux_submit') {
+    return (
+      `[page action] On the generated page ${label}, the user submitted: ` +
+      `${JSON.stringify(p.values ?? {})}. Treat this as the user's input: do the ` +
+      `work and reply (update the page with render-page if appropriate).`
+    );
+  }
+  if (p.action === 'ux_confirm') {
+    return (
+      `[page action] On the generated page ${label}, the user chose ` +
+      `${JSON.stringify(p.choice ?? '')}. Continue accordingly.`
+    );
+  }
+  return null;
 }
 
 function loginOpenedUx(site: string, url: string, opened: boolean, id: string, ts: number): UxMessage {

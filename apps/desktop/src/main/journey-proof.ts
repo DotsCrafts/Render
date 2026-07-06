@@ -10,11 +10,18 @@
  *                   so the turn completes.
  *   C. human hand — the CDP relay endpoint (OPENCLI_CDP_ENDPOINT) is live and a
  *                   cookie adapter resolves to a ux login (needs a logged-in tab).
+ *   D. page write — a generated page served via runtime.servePage (opencli-ux
+ *                   kernel, --keep): /ux/config carries keep:true; a write-granted
+ *                   /ux/data call is brokered through the ux-confirm-broker (the
+ *                   human's "允许" resolves it via resolveUx); a ux_submit callback
+ *                   streams back as JSONL and is forwarded into the conversation
+ *                   as the agent's next turn — the page→action→agent round-trip.
  *
  * macOS GUI screenshot perms block window capture (QA hit this); this log + the
  * in-app cdp-selftest are the allowed evidence.
  *
  *   pnpm --filter @render/desktop proof
+ *   PROOF_STEPS=D pnpm --filter @render/desktop proof   # run a subset (A–D)
  */
 
 import { selectSandbox, describeSelection } from '@render/sandbox';
@@ -24,6 +31,10 @@ import type { AgentEvent, UxMessage, UxLoginSpec } from '@render/protocol';
 import { createAgentRuntime, type AgentRuntime } from './agent-runtime.js';
 
 const TIMEOUT_MS = Number(process.env.PROOF_TIMEOUT_MS ?? 180_000);
+// Which journey steps to run (default: all). e.g. PROOF_STEPS=D → page write only.
+const STEPS = new Set(
+  (process.env.PROOF_STEPS ?? 'ABCD').toUpperCase().split('').filter((c) => 'ABCD'.includes(c)),
+);
 const line = (s = ''): void => console.log(s);
 const hr = (): void => line('─'.repeat(68));
 
@@ -97,66 +108,147 @@ async function main(): Promise<number> {
     effort: 'low',
   });
 
-  const result: Record<string, unknown> = { ok: false };
+  const result: Record<string, unknown> = { ok: false, steps: [...STEPS].sort().join('') };
+  const passed: Record<string, boolean> = {};
   try {
-    // ── A. app hand: /opencli public adapter → real data as ux render ─────────
-    line('A. app hand — /opencli arxiv search (REAL):');
-    // opencli submit() resolves only AFTER the router runs and the ux + turn
-    // events are emitted, so the ux render is already in `uxSeen` here.
-    await deadline(
-      runtime.submit('/opencli arxiv search query="retrieval augmented generation" limit=3'),
-      'opencli submit',
-    );
-    const arxivUx = uxSeen.find((m) => m.kind === 'render' && m.spec && 'items' in m.spec);
-    const papers =
-      arxivUx && 'items' in arxivUx.spec ? (arxivUx.spec.items ?? []) : [];
-    result.opencliPapers = papers.length;
-    if (papers.length === 0) throw new Error('opencli arxiv returned no ux render items');
-    hr();
+    if (STEPS.has('A')) {
+      // ── A. app hand: /opencli public adapter → real data as ux render ───────
+      line('A. app hand — /opencli arxiv search (REAL):');
+      // opencli submit() resolves only AFTER the router runs and the ux + turn
+      // events are emitted, so the ux render is already in `uxSeen` here.
+      await deadline(
+        runtime.submit('/opencli arxiv search query="retrieval augmented generation" limit=3'),
+        'opencli submit',
+      );
+      const arxivUx = uxSeen.find((m) => m.kind === 'render' && m.spec && 'items' in m.spec);
+      const papers = arxivUx && 'items' in arxivUx.spec ? (arxivUx.spec.items ?? []) : [];
+      result.opencliPapers = papers.length;
+      if (papers.length === 0) throw new Error('opencli arxiv returned no ux render items');
+      passed.A = true;
+      hr();
+    }
 
-    // ── B. brain + HITL: real codex turn with a command-approval round-trip ───
-    line('B. brain — codex turn that asks command approval (HITL round-trip):');
-    const turnDone = waitFor(log, (e) => e.kind === 'turn_completed');
-    await deadline(
-      runtime.submit(
-        'Run the shell command `date -u` to get the current UTC time, then tell me exactly what it printed. You must run it as a command.',
-      ),
-      'codex submit',
-    );
-    const completion = await deadline(turnDone, 'codex turn_completed');
-    process.stderr.write('\n');
-    const confirmRoundTrip = resolvedUx.size > 0;
-    result.codexTurnStatus = completion.kind === 'turn_completed' ? completion.status : 'unknown';
-    result.confirmRoundTrip = confirmRoundTrip;
-    if (!confirmRoundTrip) {
-      line('   (note: codex completed without requesting approval this run)');
+    if (STEPS.has('B')) {
+      // ── B. brain + HITL: real codex turn with a command-approval round-trip ─
+      line('B. brain — codex turn that asks command approval (HITL round-trip):');
+      const turnDone = waitFor(log, (e) => e.kind === 'turn_completed');
+      await deadline(
+        runtime.submit(
+          'Run the shell command `date -u` to get the current UTC time, then tell me exactly what it printed. You must run it as a command.',
+        ),
+        'codex submit',
+      );
+      const completion = await deadline(turnDone, 'codex turn_completed');
+      process.stderr.write('\n');
+      const confirmRoundTrip = resolvedUx.size > 0;
+      result.codexTurnStatus = completion.kind === 'turn_completed' ? completion.status : 'unknown';
+      result.confirmRoundTrip = confirmRoundTrip;
+      if (!confirmRoundTrip) {
+        line('   (note: codex completed without requesting approval this run)');
+      }
+      passed.B = result.codexTurnStatus === 'completed';
+      hr();
     }
-    hr();
 
-    // ── C. human hand: CDP relay live + cookie adapter → ux login ─────────────
-    line('C. human hand — CDP relay + browser route:');
-    const endpoint = await router.browserEndpoint();
-    result.cdpEndpoint = endpoint;
-    line(`   OPENCLI_CDP_ENDPOINT → ${endpoint}`);
-    if (endpoint) {
-      const version = await fetch(`${endpoint}/json/version`).then((r) => r.json());
-      line(`   relay /json/version → ${JSON.stringify(version)}`);
+    if (STEPS.has('C')) {
+      // ── C. human hand: CDP relay live + cookie adapter → ux login ───────────
+      line('C. human hand — CDP relay + browser route:');
+      const endpoint = await router.browserEndpoint();
+      result.cdpEndpoint = endpoint;
+      line(`   OPENCLI_CDP_ENDPOINT → ${endpoint}`);
+      if (endpoint) {
+        const version = await fetch(`${endpoint}/json/version`).then((r) => r.json());
+        line(`   relay /json/version → ${JSON.stringify(version)}`);
+      }
+      await deadline(runtime.submit('/opencli 12306 me'), 'opencli browser route');
+      const loginUx = uxSeen.find((m) => m.kind === 'login');
+      result.browserRouteLogin = Boolean(loginUx);
+      if (loginUx && loginUx.kind === 'login') {
+        const login = loginUx.spec as UxLoginSpec;
+        line(`   ux login → site=${login.site} loginUrl=${login.loginUrl}`);
+      }
+      passed.C = Boolean(endpoint) && Boolean(loginUx);
+      hr();
     }
-    await deadline(runtime.submit('/opencli 12306 me'), 'opencli browser route');
-    const loginUx = uxSeen.find((m) => m.kind === 'login');
-    result.browserRouteLogin = Boolean(loginUx);
-    if (loginUx && loginUx.kind === 'login') {
-      const login = loginUx.spec as UxLoginSpec;
-      line(`   ux login → site=${login.site} loginUrl=${login.loginUrl}`);
+
+    if (STEPS.has('D')) {
+      // ── D. page write path: generated page → action → agent round-trip ──────
+      line('D. page write path — keep-mode page, brokered write, action round-trip:');
+      // A minimal page with one submit button — served through the runtime so it
+      // gets the spec-guard, the write-confirm broker, and callback forwarding.
+      const specJson = JSON.stringify({
+        root: 'root',
+        state: {},
+        elements: {
+          root: { type: 'Stack', props: { direction: 'vertical', gap: 'md' }, children: ['btn'] },
+          btn: { type: 'Button', props: { label: '提交' }, on: { press: { action: 'ux_submit' } } },
+        },
+      });
+      const page = await runtime.servePage({
+        specJson,
+        title: 'proof-page',
+        allow: '',
+        allowWrite: 'arxiv search', // per-command write grant (harmless read used as the granted command)
+      });
+      const pageUrl = await deadline(page.whenReady(), 'page url');
+      if (!pageUrl) throw new Error('page never announced a url (is opencli-ux/ux.mjs present?)');
+      line(`   page served → ${pageUrl}`);
+      const cfg = (await (await fetch(new URL('/ux/config', pageUrl))).json()) as {
+        keep?: boolean;
+        session: string;
+        token: string;
+        allowWrite?: string[];
+      };
+      if (cfg.keep !== true) throw new Error('/ux/config missing keep:true');
+      result.pageConfigKeep = true;
+      line(`   /ux/config → keep:true, allowWrite:${JSON.stringify(cfg.allowWrite)}`);
+
+      // write-granted /ux/data: the kernel asks Render's confirm broker; the
+      // blocking confirm card is auto-approved above (the "human" allows) and
+      // the command runs. Anything but a write_denied/not_allowlisted proves
+      // the brokered path.
+      const dataRes = (await (
+        await fetch(new URL('/ux/data', pageUrl), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-ux-token': cfg.token },
+          body: JSON.stringify({ site: 'arxiv', command: 'search', positional: [], args: { query: 'agents', limit: 1 } }),
+        })
+      ).json()) as { ok?: boolean; code?: string; error?: string };
+      const brokered = dataRes.code !== 'write_denied' && dataRes.code !== 'not_allowlisted';
+      result.pageWriteBrokered = brokered;
+      line(`   /ux/data (write-granted) → ok:${dataRes.ok} code:${dataRes.code ?? '-'}`);
+      if (!brokered) throw new Error(`write was not brokered: ${dataRes.error ?? dataRes.code}`);
+
+      // page action → agent: post the ux_submit callback like the page would;
+      // the kernel streams it as JSONL, the runtime forwards it into the
+      // conversation ([page action] …) and a real turn answers it.
+      const echoed = waitFor(
+        log,
+        (e) =>
+          e.kind === 'item' &&
+          (e as { item?: { type?: string; text?: unknown } }).item?.type === 'userMessage' &&
+          String((e as { item?: { text?: unknown } }).item?.text ?? '').includes('[page action]'),
+      );
+      const answered = waitFor(log, (e) => e.kind === 'turn_completed');
+      await fetch(new URL(`/ux/callback/${cfg.session}`, pageUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ux-token': cfg.token },
+        body: JSON.stringify({ submitted: true, action: 'ux_submit', values: { q: '42' } }),
+      });
+      await deadline(echoed, 'page action forwarded into the conversation');
+      line('   ux_submit callback → forwarded as [page action] turn input');
+      const turn = await deadline(answered, 'page-action turn completed');
+      process.stderr.write('\n');
+      result.pageActionTurnStatus = turn.kind === 'turn_completed' ? turn.status : 'unknown';
+      result.pageActionRoundTrip = true;
+      page.dispose();
+      passed.D = brokered && result.pageActionTurnStatus === 'completed';
+      hr();
     }
-    hr();
 
     result.eventKinds = countBy(log.map((e) => e.kind));
-    result.ok =
-      papers.length > 0 &&
-      result.codexTurnStatus === 'completed' &&
-      Boolean(endpoint) &&
-      Boolean(loginUx);
+    result.passed = passed;
+    result.ok = [...STEPS].every((s) => passed[s] === true);
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -167,7 +259,7 @@ async function main(): Promise<number> {
 
   line(
     result.ok
-      ? '✅ M6 PASS — opencli ux render + codex HITL round-trip + live CDP browser route'
+      ? `✅ M6 PASS — steps ${[...STEPS].sort().join('')} (opencli ux render / codex HITL / CDP route / page write round-trip)`
       : '❌ M6 INCOMPLETE',
   );
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');

@@ -50,7 +50,7 @@ export interface TabState {
 
 // ── Saved render-pages (Delta 3 persistence) ─────────────────────────────────
 
-/** A persisted page version: the json-render spec + its server-owned allowlist. */
+/** A persisted page version: the json-render spec + its server-owned grants. */
 export interface SavedPageRecord {
   id: string;
   title: string;
@@ -58,6 +58,8 @@ export interface SavedPageRecord {
   specJson: string;
   /** the `<site> <command>,…` allowlist the page may run via /ux/data */
   allow: string;
+  /** per-command write grants (`--allow-write "site cmd,…"`) — each run human-confirmed */
+  allowWrite?: string;
   convId?: string;
   /** monotonic version (newest is live); bumped by the Ask-agent loop */
   version: number;
