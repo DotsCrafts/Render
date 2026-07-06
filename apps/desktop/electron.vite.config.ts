@@ -3,11 +3,11 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
-// @render/* workspace packages publish raw TS (main field → src/*.ts), so they
-// must be BUNDLED by vite, not externalized — otherwise electron-main would
-// `require()` a .ts entrypoint at runtime and crash. `ws` / `e2b` / electron and
-// node builtins stay external. Keep this list in sync with the @render/* deps in
-// package.json (incl. transitive ones the main process pulls in).
+// Everything the main/preload bundles need at runtime is BUNDLED by vite —
+// @render/* workspace packages (raw TS entrypoints) and `ws` alike — so `out/`
+// is fully self-contained and electron-builder ships no node_modules (the
+// packaged asar is just out/** + examples/**). Only electron and node builtins
+// stay external. Keep this list in sync with the deps in package.json.
 const bundleWorkspace = {
   exclude: [
     '@render/protocol',
@@ -17,6 +17,7 @@ const bundleWorkspace = {
     '@render/opencli-router',
     '@render/opencli-bridge',
     '@render/ux-render',
+    'ws',
   ],
 };
 
@@ -25,6 +26,15 @@ const r = (p: string): string => resolve(__dirname, p);
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin(bundleWorkspace)],
+    // Bundled ws MUST take its pure-JS path: vite stubs the optional native
+    // deps (bufferutil/utf-8-validate) as EMPTY OBJECTS, so ws's guarded
+    // `require('bufferutil')` "succeeds" and installs native-fastpath wrappers
+    // that crash on any frame ≥48 bytes (`bufferUtil.mask is not a function`).
+    // These defines make ws skip the native path entirely.
+    define: {
+      'process.env.WS_NO_BUFFER_UTIL': '"1"',
+      'process.env.WS_NO_UTF_8_VALIDATE': '"1"',
+    },
     build: { rollupOptions: { input: r('src/main/index.ts') } },
   },
   preload: {

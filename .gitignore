@@ -5,3 +5,5 @@ out
 *.log
 .turbo
 .briefs/
+apps/desktop/release/
+*.tsbuildinfo

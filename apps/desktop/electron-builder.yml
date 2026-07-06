@@ -1,0 +1,63 @@
+# electron-builder — packaging for the Render desktop shell.
+#
+# The vite build (electron.vite.config.ts) bundles ALL runtime deps (@render/*
+# workspace packages + ws) into out/, so the package ships no node_modules:
+# the asar is just out/** + examples/** + package.json. This sidesteps every
+# pnpm-workspace/symlink collection pitfall in electron-builder.
+#
+# External runtime deps (opencli, codex, opencli-ux's ux.mjs) are NOT packaged —
+# Render resolves them on the host at runtime and degrades gracefully when
+# missing (see README "External dependencies").
+
+appId: com.dotscrafts.render
+productName: Render
+copyright: Copyright © 2026 DotsCrafts
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**
+  - examples/**
+  - "!node_modules/**"
+
+asar: true
+# examples/ is read by EXTERNAL processes (ux.mjs serve --html), which cannot
+# see inside the asar — ship it unpacked next to the archive.
+asarUnpack:
+  - examples/**
+npmRebuild: false
+
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.png
+  # Prototype builds are unsigned; set CSC_LINK/CSC_KEY_PASSWORD (or a keychain
+  # identity) + notarize for public distribution.
+  identity: null
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  icon: build/icon.png
+  category: Network
+  executableName: render
+  maintainer: DotsCrafts <dotscrafts.code@gmail.com>
+  synopsis: An agent-native browser — pages are generated, not installed.
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+deb:
+  artifactName: render_${version}_${arch}.${ext}

@@ -1,8 +1,14 @@
 {
   "name": "@render/desktop",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Render desktop shell — Electron browser with floating input + agent panel + CDP tabs.",
+  "homepage": "https://github.com/dotscrafts/render",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dotscrafts/render.git"
+  },
+  "author": "DotsCrafts <dotscrafts.code@gmail.com>",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -11,9 +17,12 @@
     "proof": "tsx src/main/journey-proof.ts",
     "test:nav": "electron-vite build && node test/nav-guard.e2e.mjs",
     "test:cdp": "electron-vite build && node test/cdp-opencli.e2e.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "package": "electron-vite build && electron-builder --publish never",
+    "package:mac": "electron-vite build && electron-builder --mac --publish never",
+    "package:linux": "electron-vite build && electron-builder --linux --publish never"
   },
-  "dependencies": {
+  "devDependencies": {
     "@render/agent-bridge": "workspace:*",
     "@render/cdp-human-hand": "workspace:*",
     "@render/opencli-bridge": "workspace:*",
@@ -21,9 +30,6 @@
     "@render/protocol": "workspace:*",
     "@render/sandbox": "workspace:*",
     "@render/ux-render": "workspace:*",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.0",
@@ -31,12 +37,14 @@
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.22.4",
     "typescript": "^5.7.0",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0",
+    "ws": "^8.18.0"
   }
 }
