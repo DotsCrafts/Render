@@ -15,7 +15,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, sep } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Read commands the portal page is allowed to run through /ux/data (server-owned allowlist). */
@@ -48,7 +48,12 @@ function resolvePortalHtml(): string | null {
   const env = process.env.RENDER_PORTAL_HTML?.trim();
   if (env) return existsSync(env) ? env : null;
   // dev: __dirname = apps/desktop/out/main → ../../examples/portal.html
-  const guess = join(__dirname, '..', '..', 'examples', 'portal.html');
+  // packaged: examples/ is asarUnpacked because the html is read by the
+  // EXTERNAL ux.mjs process, which cannot see inside the asar.
+  const guess = join(__dirname, '..', '..', 'examples', 'portal.html').replace(
+    `${sep}app.asar${sep}`,
+    `${sep}app.asar.unpacked${sep}`,
+  );
   return existsSync(guess) ? guess : null;
 }
 

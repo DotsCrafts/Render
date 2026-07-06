@@ -1,6 +1,6 @@
 {
   "name": "render-browser",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Render — a Chromium browser whose brain is an agent. agent(brain) + opencli(app hand) + sandbox(sandbox hand) + chromium CDP(human hand).",
   "type": "module",
@@ -15,6 +15,8 @@
     "build": "pnpm -r --filter=./packages/* build",
     "typecheck": "pnpm -r exec tsc --noEmit",
     "dev": "pnpm --filter @render/desktop dev",
-    "start": "pnpm --filter @render/desktop start"
+    "start": "pnpm --filter @render/desktop start",
+    "package:mac": "pnpm --filter @render/desktop package:mac",
+    "package:linux": "pnpm --filter @render/desktop package:linux"
   }
 }

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # version comes from packageManager in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Typecheck (all projects)
+        run: pnpm typecheck
+
+      - name: Unit tests — opencli-bridge
+        run: pnpm --filter @render/opencli-bridge test
+
+      - name: E2E — nav guard (real Electron under Xvfb)
+        working-directory: apps/desktop
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: xvfb-run -a pnpm test:nav

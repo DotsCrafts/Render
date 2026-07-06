@@ -1,0 +1,77 @@
+name: Release
+
+# Tag a version to cut a release:  git tag v0.1.0 && git push origin v0.1.0
+# Artifacts: macOS dmg+zip (arm64 + x64, unsigned prototype) and Linux
+# AppImage+deb (x64), attached to a draft GitHub Release for review.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: package:mac
+            artifact: render-macos
+            files: |
+              apps/desktop/release/*.dmg
+              apps/desktop/release/*-mac.zip
+          - os: ubuntu-latest
+            script: package:linux
+            artifact: render-linux
+            files: |
+              apps/desktop/release/*.AppImage
+              apps/desktop/release/*.deb
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      # Prototype releases are unsigned; flip when signing certs are configured.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Package
+        run: pnpm --filter @render/desktop ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  # Single job attaches everything — two matrix legs racing to create the same
+  # draft release would create duplicate drafts.
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/**
