@@ -77,7 +77,9 @@ export class LocalSeatbeltSandbox implements SandboxProvider {
     }
 
     return await new Promise<ExecResult>((resolve, reject) => {
-      const child = nodeSpawn(program, argv, { cwd, env });
+      // stdin MUST be 'ignore': exec() never writes to the child, and opencli
+      // (≥1.8) blocks forever waiting for EOF when stdin is a never-closed pipe.
+      const child = nodeSpawn(program, argv, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (d) => (stdout += d.toString()));

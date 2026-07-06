@@ -11,6 +11,9 @@ import type { OpencliExec } from './types.js';
 /** opencli's AUTH_REQUIRED exit code (verified against 1.8.4 cookie adapters). */
 export const AUTH_REQUIRED_EXIT = 77;
 
+/** opencli's BROWSER_CONNECT exit code (Browser Bridge profile not connected). */
+export const BROWSER_CONNECT_EXIT = 69;
+
 export function extractJson(stdout: string): unknown {
   const text = stdout.trim();
   if (!text) return undefined;
@@ -37,6 +40,19 @@ export function isAuthRequired(exec: OpencliExec): boolean {
   return /AUTH_REQUIRED|Not logged in(?:to)?|Sign in at|Please .*log in/i.test(
     `${exec.stdout}\n${exec.stderr}`,
   );
+}
+
+/**
+ * True when a run failed because no browser session is connected at all
+ * (opencli ≥1.8 routes website cookie adapters through Browser Bridge profiles;
+ * a disconnected profile fails with BROWSER_CONNECT before auth is even seen).
+ * The remedy is the same as needsLogin: open the site in a Render tab, which
+ * both connects the bridge profile and lets the human log in.
+ */
+export function isBrowserUnavailable(exec: OpencliExec): boolean {
+  const text = `${exec.stdout}\n${exec.stderr}`;
+  if (/code:\s*BROWSER_CONNECT/i.test(text)) return true;
+  return exec.exitCode === BROWSER_CONNECT_EXIT && /browser|profile|chrome/i.test(text);
 }
 
 /**

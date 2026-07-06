@@ -19,7 +19,7 @@ import type {
 } from '@render/protocol';
 import { buildArgv, type OpencliFormat } from './argv.js';
 import { MetadataIndex, mapStrategy } from './metadata.js';
-import { extractJson, extractLoginUrl, isAuthRequired } from './parse.js';
+import { extractJson, extractLoginUrl, isAuthRequired, isBrowserUnavailable } from './parse.js';
 import type { CommandMeta, OpencliExec, OpencliRouterDeps } from './types.js';
 
 export interface OpencliRouterHandle extends OpencliRouter {
@@ -134,12 +134,14 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     }
 
     const exec = await run(argv, { env: { OPENCLI_CDP_ENDPOINT: endpoint } });
-    if (isAuthRequired(exec)) {
+    if (isAuthRequired(exec) || isBrowserUnavailable(exec)) {
       return {
         ok: false,
         strategy,
         ranOn: 'cdp-human-hand',
-        error: 'login required',
+        error: isAuthRequired(exec)
+          ? 'login required'
+          : 'browser session not connected — open the site in a Render tab to connect and log in',
         needsLogin: { site: inv.site, loginUrl: loginUrl(exec) },
       };
     }
