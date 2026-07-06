@@ -21,6 +21,7 @@ import { registerRenderOpencliApp } from './opencli-render-app.js';
 import { maybeWireOpencliBridge, renderBridgeProfile } from './opencli-bridge-wire.js';
 import { createCodexProvider } from './codex-provider.js';
 import { createPagesStore } from './pages-store.js';
+import { disposeUxHost } from './ux-server.js';
 import { startHomePortal } from './home-portal.js';
 import { installAppMenu } from './app-menu.js';
 import { ensureOpencliDaemon } from './opencli-daemon.js';
@@ -115,8 +116,18 @@ function wire(win: BrowserWindow): void {
     // the port is disabled, fall back to the human-hand relay (remote/e2b seam).
     cdpEndpoint: async () => (renderCdp.enabled ? renderCdp.endpoint : humanHand.cdpEndpoint()),
     // the `render-open` tool: open a page in Render's OWN browser, not system Chrome.
-    // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange.
+    // tabs.openUrl emits a tabsChanged snapshot via the manager's onChange, and
+    // returns the tab id so the runtime can update delivered pages in place.
     openTab: (url) => tabs.openUrl(url),
+    // update-in-place for revised render-pages: re-point (or reload, when the URL
+    // is unchanged) the tab the page lives in. Deliberately does NOT activate the
+    // tab — a skeleton→refine pass must not steal focus. false → tab was closed,
+    // and the runtime opens a fresh one instead.
+    navigateTab: (tabId, url) => {
+      if (!tabs.getTarget(tabId)) return false;
+      void tabs.navigate(tabId, url);
+      return true;
+    },
     // register each conversation's tab group (label/color) when it becomes active
     // so the strip can chip it even before the bridge mints its first tab.
     registerGroup: (group) => tabs.ensureGroup(group),
@@ -126,6 +137,10 @@ function wire(win: BrowserWindow): void {
     materializeCodexHome: () => codexProvider.materializeCodexHome(),
     // Delta 3: persist each delivered Tier-2 page's spec so it can be saved/reopened.
     persistPage: (input) => pagesStore.persist(input),
+    // a revised page persists as a new VERSION of the same entry, not a new draft.
+    updatePage: (id, input) => {
+      void pagesStore.addVersion(id, input);
+    },
     now: () => Date.now(),
   });
 
@@ -218,6 +233,7 @@ function wire(win: BrowserWindow): void {
     void opencliBridge?.dispose();
     void codexProvider.dispose();
     homePortal?.dispose();
+    disposeUxHost(); // kill the pooled ux server (per-page servers die with their UxPages)
   });
 }
 
