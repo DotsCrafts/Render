@@ -6,3 +6,4 @@ out
 .turbo
 .briefs/
 release
+*.tsbuildinfo
