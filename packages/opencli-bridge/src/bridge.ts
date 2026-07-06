@@ -16,7 +16,9 @@
 
 import { WebSocket } from 'ws';
 import { dispatch, type DispatchCaps } from './actions.js';
-import { RENDER_CONTEXT_ID, errorToResult, helloFrame } from './protocol.js';
+import { createDispatchLanes } from './dispatch-lanes.js';
+import { RENDER_CONTEXT_ID, errorToResult, fail, helloFrame } from './protocol.js';
+import { leaseKeyForCommand, type SessionLeaseRegistry } from './session-registry.js';
 import type {
   CommandFrame,
   FrameRecord,
@@ -29,10 +31,25 @@ const DEFAULT_DAEMON_URL = 'ws://127.0.0.1:19825/ext';
 const RECONNECT_DELAY_MS = 1_000;
 /** Max time stop() waits for the daemon to ACK our close (unregister our profile). */
 const CLOSE_GRACE_MS = 2_000;
+/**
+ * Hard bound on a single dispatch. Every op is already individually bounded
+ * (navigate/eval timeouts), but a CDP send against a wedged renderer can hang
+ * past all of them; the deadline answers the daemon with a failure and frees
+ * the lane so one stuck command can't stall its session (or, for exclusive
+ * ops, everyone). The abandoned dispatch keeps running detached — its late
+ * result is discarded (the daemon has already been answered for that id).
+ */
+const DISPATCH_DEADLINE_MS = 45_000;
 
 export interface BridgeDeps {
-  /** Owns + leases the CDP targets the bridge drives. */
-  provider: TargetProvider;
+  /**
+   * Owns + leases the CDP targets the bridge drives. Pass a
+   * `SessionLeaseRegistry` to partition leases per opencli session (each
+   * command is served from its own session's partition, and `close-window`
+   * only releases the calling session's leases). A plain `TargetProvider`
+   * keeps the legacy shared-lease behaviour.
+   */
+  provider: TargetProvider | SessionLeaseRegistry;
   /**
    * Multi-lease capabilities (network capture buffer, download routing). Omitted
    * for a single-lease bridge — the multi-lease actions then fail loudly.
@@ -50,6 +67,8 @@ export interface BridgeDeps {
   contextId?: string;
   /** Auto re-connect + re-hello when the daemon drops us (default true). */
   autoReconnect?: boolean;
+  /** Override the per-command dispatch deadline (default 45 s; tests only). */
+  dispatchDeadlineMs?: number;
   /** Called after every successful socket open + hello, including reconnects. */
   onConnect?: () => void;
   /** Observe every wire frame (TX/RX) — the harness uses this for evidence. */
@@ -89,14 +108,21 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
     socket.send(JSON.stringify(frame));
   };
 
-  // Commands are dispatched ONE AT A TIME, in arrival order. The bridge drives a
-  // SINGLE Chromium and shares lease state (mint / select / navigate); dispatching
-  // concurrently races that state and wedges the daemon after a burst — the root
-  // cause of "first few commands work, then everything hangs". A FIFO chain
-  // serializes them. Every dispatch op is bounded (navigate/eval carry timeouts;
-  // login-wait is the adapter's own whoami polling, not one long bridge command),
-  // so no single command can stall the queue indefinitely.
-  let dispatchQueue: Promise<void> = Promise.resolve();
+  // Commands are dispatched through LANES. Originally everything ran through
+  // one global FIFO — safe (concurrent dispatch against shared lease state was
+  // the root cause of "first few commands work, then everything hangs") but a
+  // waterfall: one session's slow navigate stalled every other session. With a
+  // SessionLeaseRegistry the leases are partitioned per session, so commands
+  // from different sessions run concurrently (FIFO within a session), while
+  // lease-MUTATING ops (`tabs new/select/close`, `close-window`) — which touch
+  // the shared Electron tab host — keep an exclusive global lane. A plain
+  // TargetProvider shares lease state across sessions, so it keeps the strict
+  // global FIFO (every command exclusive). Each dispatch is additionally
+  // bounded by the 45 s deadline so no single command can wedge its lane.
+  const lanes = createDispatchLanes();
+  const registry = isSessionRegistry(deps.provider) ? deps.provider : null;
+  const plainProvider = registry ? null : (deps.provider as TargetProvider);
+  const deadlineMs = deps.dispatchDeadlineMs ?? DISPATCH_DEADLINE_MS;
 
   const onMessage = (socket: WebSocket, raw: string): Promise<void> => {
     let cmd: CommandFrame;
@@ -110,17 +136,20 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
     const run = async (): Promise<void> => {
       let result: ResultFrame;
       try {
-        result = await dispatch(deps.provider, cmd, deps.caps ?? {});
+        const provider = registry ? registry.providerFor(cmd) : plainProvider!;
+        result = await withDeadline(cmd.id, deadlineMs, dispatch(provider, cmd, deps.caps ?? {}));
+        // completion counts as activity too, so a command longer than the idle
+        // timeout doesn't get its session reaped right at the finish line.
+        registry?.touch(cmd);
       } catch (err) {
         result = errorToResult(cmd.id, err);
       }
       record('TX', result);
       send(socket, result);
     };
-    // chain onto the queue; run on both settle paths so one failure can't stall it.
-    const queued = dispatchQueue.then(run, run);
-    dispatchQueue = queued.catch(() => {});
-    return queued;
+    const laneKey = registry ? leaseKeyForCommand(cmd) : '';
+    const exclusive = !registry || isLeaseMutating(cmd);
+    return lanes.enqueue(laneKey, exclusive, run);
   };
 
   const scheduleReconnect = (): void => {
@@ -221,4 +250,42 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
       return ws?.readyState === WebSocket.OPEN;
     },
   };
+}
+
+function isSessionRegistry(
+  p: TargetProvider | SessionLeaseRegistry,
+): p is SessionLeaseRegistry {
+  return typeof (p as Partial<SessionLeaseRegistry>).providerFor === 'function';
+}
+
+/** `tabs` ops that create/destroy/re-point real views through the shared tab host. */
+const LEASE_MUTATING_TAB_OPS: ReadonlySet<string> = new Set(['new', 'select', 'close']);
+
+/** Whether a command mutates lease/view state and must take the exclusive lane. */
+function isLeaseMutating(cmd: CommandFrame): boolean {
+  if (cmd.action === 'close-window') return true;
+  if (cmd.action !== 'tabs') return false;
+  // `tabs` with no op defaults to `list` (read-only) in the action handler.
+  return typeof cmd.op === 'string' && LEASE_MUTATING_TAB_OPS.has(cmd.op);
+}
+
+/** Race a dispatch against the deadline; on expiry answer with a failure frame. */
+function withDeadline(
+  id: string,
+  ms: number,
+  work: Promise<ResultFrame>,
+): Promise<ResultFrame> {
+  // If the deadline wins, `work` is abandoned; pre-handle its rejection so a
+  // late failure can't surface as an unhandled rejection.
+  void work.catch(() => {});
+  let timer: NodeJS.Timeout;
+  const deadline = new Promise<ResultFrame>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(
+        fail(id, `dispatch deadline exceeded after ${ms}ms`, { errorCode: 'dispatch_deadline' }),
+      );
+    }, ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }

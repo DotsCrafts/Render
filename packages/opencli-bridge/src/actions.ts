@@ -146,6 +146,13 @@ export async function handleExec(
 
 // ── close-window ───────────────────────────────────────────────────────────────
 
+/**
+ * Disposes the provider this command was RESOLVED to. Under the session
+ * registry that is the command's own partition, so `close-window` releases
+ * only the calling session's leases (extension parity: releaseLease(leaseKey,
+ * "explicit close")); a plain single/multi-lease provider still tears down
+ * everything it owns, and `bridge.stop()` remains the dispose-all path.
+ */
 export async function handleCloseWindow(
   provider: TargetProvider,
   cmd: CommandFrame,

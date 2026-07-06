@@ -13,6 +13,7 @@
 
 import { createSingleLeaseProvider } from './lease.js';
 import { createMultiLeaseProvider, type MultiLeaseProvider } from './multi-lease.js';
+import { createSessionLeaseRegistry, type SessionLeaseRegistry } from './session-registry.js';
 import { createWebContentsTarget, type WcContents } from './webcontents-target.js';
 import type { TargetProvider } from './types.js';
 
@@ -79,5 +80,29 @@ export function createMultiWebContentsLeaseProvider(
         destroyView: view.destroy,
       });
     },
+  });
+}
+
+/**
+ * createSessionWebContentsLeaseProvider — the multi-lease provider above,
+ * PARTITIONED per opencli session (leaseKey = `${surface}\0${session}`, the
+ * extension's getLeaseKey). Each session gets its own tab group registry with
+ * its own active-lease flag, minted lazily on the session's first command; a
+ * session's `close-window` (and its idle timeout) releases only that
+ * session's tabs, while the registry's `dispose()` — the `bridge.stop()`
+ * path — still tears everything down.
+ */
+export function createSessionWebContentsLeaseProvider(
+  deps: WebContentsLeaseDeps & { onRelease?: (leaseKey: string, reason: string) => void },
+): SessionLeaseRegistry {
+  return createSessionLeaseRegistry({
+    createTarget: async () => {
+      const view = await deps.mintView();
+      return createWebContentsTarget({
+        webContents: view.webContents,
+        destroyView: view.destroy,
+      });
+    },
+    onRelease: deps.onRelease,
   });
 }
