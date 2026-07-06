@@ -26,6 +26,15 @@ const r = (p: string): string => resolve(__dirname, p);
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin(bundleWorkspace)],
+    // Bundled ws MUST take its pure-JS path: vite stubs the optional native
+    // deps (bufferutil/utf-8-validate) as EMPTY OBJECTS, so ws's guarded
+    // `require('bufferutil')` "succeeds" and installs native-fastpath wrappers
+    // that crash on any frame ≥48 bytes (`bufferUtil.mask is not a function`).
+    // These defines make ws skip the native path entirely.
+    define: {
+      'process.env.WS_NO_BUFFER_UTIL': '"1"',
+      'process.env.WS_NO_UTF_8_VALIDATE': '"1"',
+    },
     build: { rollupOptions: { input: r('src/main/index.ts') } },
   },
   preload: {

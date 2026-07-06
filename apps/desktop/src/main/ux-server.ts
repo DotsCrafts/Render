@@ -83,6 +83,14 @@ export function serveUxSpec(opts: {
     resolveReady = r;
   });
 
+  // spawn-time ENOENT (e.g. `node` not on PATH when launched from Finder)
+  // surfaces as an async 'error' event — without a handler it would CRASH the
+  // main process. Degrade like every other missing-dependency path.
+  child.on('error', (err) => {
+    console.warn('[ux-server] failed to spawn ux render:', String(err));
+    resolveReady(null);
+  });
+
   // ux render --keep announces `{"rendered":true,"url":"…","keep":true}` on stdout.
   let buf = '';
   child.stdout?.on('data', (d: Buffer) => {

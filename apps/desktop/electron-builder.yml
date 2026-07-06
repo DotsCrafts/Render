@@ -28,7 +28,6 @@ asar: true
 asarUnpack:
   - examples/**
 npmRebuild: false
-electronLanguages: [en, zh_CN]
 
 mac:
   category: public.app-category.productivity

@@ -110,6 +110,14 @@ export function startHomePortal(opts: { profile?: string } = {}): HomePortal {
     return DISABLED;
   }
 
+  // spawn-time ENOENT (e.g. `node` not on PATH when launched from Finder)
+  // surfaces as an async 'error' event — without a handler it would CRASH the
+  // main process, and 'exit' never fires so whenReady() would hang too.
+  child.on('error', (err) => {
+    console.warn('[home-portal] failed to spawn ux serve:', String(err));
+    resolveReady(null);
+  });
+
   // ux serve announces `{"served":true,"url":"http://127.0.0.1:<port>/...",...}` on its first stdout line.
   let buf = '';
   child.stdout?.on('data', (d: Buffer) => {
