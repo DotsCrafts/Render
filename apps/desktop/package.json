@@ -15,6 +15,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "proof": "tsx src/main/journey-proof.ts",
+    "test": "node test/run.mjs",
     "test:nav": "electron-vite build && node test/nav-guard.e2e.mjs",
     "test:cdp": "electron-vite build && node test/cdp-opencli.e2e.mjs",
     "test:unit": "tsx --test test/unit/genpage-write.test.ts",

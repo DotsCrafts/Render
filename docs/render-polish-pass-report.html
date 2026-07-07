@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Render 打磨轮报告 — agent→opencli 主链路加固</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--ink:#1a1d23;--mut:#6b7280;--line:#e5e7eb;--acc:#4f6df5;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--chip:#eef1ff}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#161b22;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--acc:#7c93ff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--chip:#1c2333}}
+*{box-sizing:border-box;margin:0}
+body{font:15px/1.65 -apple-system,"PingFang SC","Segoe UI",sans-serif;background:var(--bg);color:var(--ink);padding:2rem 1rem;max-width:960px;margin:auto}
+h1{font-size:1.5rem;margin-bottom:.3rem}
+h2{font-size:1.12rem;margin:1.6rem 0 .6rem;display:flex;align-items:center;gap:.5rem}
+h2 .n{background:var(--acc);color:#fff;border-radius:50%;width:1.5rem;height:1.5rem;display:inline-flex;align-items:center;justify-content:center;font-size:.8rem;flex:none}
+.sub{color:var(--mut);margin-bottom:1.2rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem 1.2rem;margin:.8rem 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.8rem}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:.9rem 1rem}
+.stat b{font-size:1.5rem;display:block}
+.stat span{color:var(--mut);font-size:.82rem}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:600;white-space:nowrap}
+code{background:var(--chip);padding:.1em .4em;border-radius:5px;font-size:.85em;font-family:ui-monospace,Menlo,monospace}
+.tag{display:inline-block;border-radius:999px;padding:.05rem .55rem;font-size:.75rem;font-weight:600;white-space:nowrap}
+.crit{background:#fee2e2;color:#b91c1c}.high{background:#ffedd5;color:#c2410c}.med{background:#fef9c3;color:#a16207}.low{background:#e0f2fe;color:#0369a1}
+@media(prefers-color-scheme:dark){.crit{background:#3d1418;color:#ff7b72}.high{background:#3a2410;color:#f0883e}.med{background:#332b10;color:#e3b341}.low{background:#0f2a3d;color:#58a6ff}}
+.ok{color:var(--ok);font-weight:600}
+ul{padding-left:1.2rem}li{margin:.25rem 0}
+details{margin:.5rem 0}summary{cursor:pointer;font-weight:600;color:var(--acc)}
+.flow{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;font-size:.85rem}
+.flow .s{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:.3rem .6rem}
+.flow .a{color:var(--mut)}
+footer{margin-top:2rem;color:var(--mut);font-size:.8rem;border-top:1px solid var(--line);padding-top:.8rem}
+</style>
+</head>
+<body>
+<h1>Render 打磨轮 — agent→opencli 主链路加固</h1>
+<p class="sub">2026-07-07 · commit <code>2705c53</code> · 58 文件 · +3149/−383 · 多 agent 对抗性验证驱动</p>
+
+<div class="grid">
+<div class="stat"><b>39/39</b><span>审计发现全部通过 3 视角对抗验证(117 验证 agent,0 驳回)</span></div>
+<div class="stat"><b>~30</b><span>本轮修复的摩擦点(其余 3 项已派生云端任务)</span></div>
+<div class="stat"><b>81</b><span>单元测试全绿(4 套件,3 套为本轮新建)</span></div>
+<div class="stat"><b class="ok">✅ PASS</b><span>4 段端到端 journey proof(真实 codex + opencli + arXiv)</span></div>
+</div>
+
+<h2><span class="n">1</span>方法:第一性原理 + 对抗性验证</h2>
+<div class="card">
+<div class="flow">
+<span class="s">6 并行读者读透各子系统</span><span class="a">→</span>
+<span class="s">39 候选摩擦点去重</span><span class="a">→</span>
+<span class="s">每条 × 3 质疑视角(代码证据 / 用户影响 / 已有缓解)</span><span class="a">→</span>
+<span class="s">3 agent 并行实施 + 我集成主线</span><span class="a">→</span>
+<span class="s">4 lens 对抗性评审整个 diff</span><span class="a">→</span>
+<span class="s">10 项确认回归全部修复</span><span class="a">→</span>
+<span class="s">journey proof 实证</span>
+</div>
+<p style="margin-top:.6rem;color:var(--mut)">衡量"顺畅"的第一性标准:首反馈时间 / 流式进度 vs 死寂 / 动作往返延迟 / 错误恢复路径 / 登录交接 / 并发安全 / 进程生命周期。</p>
+</div>
+
+<h2><span class="n">2</span>修了什么(按用户旅程)</h2>
+<div class="card">
+<table>
+<tr><th>旅程环节</th><th>之前</th><th>现在</th></tr>
+<tr><td><b>① 输入意图</b></td><td>窗口启动被 daemon 预热阻塞至 15s;首条消息后数秒死寂;boot 失败永远无声</td><td>窗口立即出现;合成 boot turn 让面板即时进入 working;任何失败都出错误卡 + 状态闭合;codex 崩溃自愈</td></tr>
+<tr><td><b>② agent 调 opencli</b></td><td>exec 无超时、Stop 无效、桥接 FIFO 可被一条挂死命令永久堵死;默认配置下 profile 被钉死到断连的 <code>default</code></td><td>沙箱/路由/桥接三层限时(60/120/45s,登录不限);Stop 全路径可用;重连代号防僵尸竞争;bridge profile 单一事实来源</td></tr>
+<tr><td><b>③ 生成页面弹出</b></td><td>spec 只验证 JSON.parse,坏 spec = 白板标签页;失败对 agent 不可见;ux 服务器无超时且每页泄漏一个进程</td><td><code>spec-guard</code> 交付时校验(结构 / 终结动作 / --allow 交叉);失败自动 steer 回 agent 修复重发;12s 就绪期限 + stderr 透出;页面进程随 tab 关闭而销毁</td></tr>
+<tr><td><b>④ 页面操作往返</b></td><td>答案整块最后弹出;推理碎片刷爆事件窗挤掉卡片;运行中命令不可见;mid-run 输入开出竞争 turn</td><td>答案草稿流式填充(同 id 原位替换);推理 2 事件/秒批量;命令行实时"running…"行;busy 输入自动 steer,/opencli 正确路由</td></tr>
+<tr><td><b>⑤ 登录 / 错误恢复</b></td><td>成功抓取因正文含"请登录"被误判弹登录墙;登录 URL 用 slug 拼造(xhs.com);登录卡点击后显示"✓ 已取消"</td><td>auth 判定以退出码为准;URL 从 opencli 元数据/输出真实提取,拼不出就引导自行导航;卡片文案诚实</td></tr>
+</table>
+</div>
+
+<h2><span class="n">3</span>对抗性评审抓到并修复的回归(10 项确认)</h2>
+<div class="card">
+<table>
+<tr><th></th><th>发现</th><th>修复</th></tr>
+<tr><td><span class="tag high">high</span></td><td>boot turn 单槽被第二条消息覆盖 → busy 永久卡死(重载也无法恢复)</td><td>改为 Set,codex 真实 turn 启动时全量退休;Stop 取消按 turn 粒度</td></tr>
+<tr><td><span class="tag med">med</span></td><td>boot 期间点"新会话" → 用户消息被丢弃并报错</td><td>重入循环:旧 boot 报废后消息自动骑上新线程(串行,无双沙箱竞争)</td></tr>
+<tr><td><span class="tag med">med</span></td><td>spec-guard 漏数组型 / watch / 嵌套 onSuccess 绑定;--allow 归一化与内核不一致</td><td>递归绑定遍历;parseAllow 改 trim-only 精确镜像 ux.mjs;9 个新单测钉死</td></tr>
+<tr><td><span class="tag med">med</span></td><td>busy 时输入 <code>/opencli</code> 被当散文 steer 给模型</td><td>steer() 先走 parseOpencliCommand,镜像 submit()</td></tr>
+<tr><td><span class="tag med">med</span></td><td>桥接重连重置 FIFO → 新命令与僵尸 dispatch 并发竞争租约状态</td><td>连接代号:陈旧排队命令跳过、链保留,在途头部由期限兜底</td></tr>
+<tr><td><span class="tag med">med</span></td><td>带散文的误标 ```json 卡片数据被静默删除</td><td>只剥离真正被消费为 spec 的围栏;散文并入卡片 body,内容零丢失</td></tr>
+<tr><td><span class="tag low">low</span></td><td>取消的 /opencli turn 留下永久转圈的 running 行</td><td>cancel/异常路径补发 completed 命令项(exit 130/1)</td></tr>
+</table>
+<p style="margin-top:.5rem;color:var(--mut)">另 20 项评审发现经双质疑裁定为"机制成立但影响不可达/理论化",未采取行动(细节在评审工作流日志中)。</p>
+</div>
+
+<h2><span class="n">4</span>验证证据</h2>
+<div class="card">
+<ul>
+<li><b>journey proof(4 段,全部计入 ok)</b>:A. <code>/opencli arxiv search</code> 真实数据渲染卡 ✓ · B. codex 0.136.0 HITL 确认回路 <b>且被批准的 <code>date -u</code> 确实执行</b>(B1 漂移回归断言)✓ · C. CDP relay 存活 + 12306 登录墙弹真实登录卡(<code>kyfw.12306.cn</code>)✓ · D. 生成页内核:GET 200 / 白名单放行 / 403 拒绝 / spec-guard 拦截 ✓</li>
+<li><b>单测 81/81</b>:opencli-bridge 30(含"永不 resolve 的 exec 超时后队列继续排水"回归)· opencli-router 12(exit-0 含登录词不误判等)· ux-render 11(feed 分组/去重/配对)· desktop 28(事件缓冲 12 + spec-guard 9 + ux-server 5 + daemon 2)</li>
+<li><b>typecheck / build</b> 全仓通过(root 脚本修复了 desktop 的检查盲区);新增最小 GitHub Actions CI(单测层)</li>
+</ul>
+</div>
+
+<h2><span class="n">5</span>接下来(已在云端会话运行)</h2>
+<div class="card">
+<table>
+<tr><th>任务</th><th>解决的结构性缺口</th></tr>
+<tr><td><b>生成页写路径(page→agent 通道)</b></td><td>旅程第 4 步核心:页面按钮经回调通道 steer 回 agent;按命令粒度写授权 + Render 侧人工确认(涉及 opencli-ux 内核)</td></tr>
+<tr><td><b>桥接租约按会话分区</b></td><td>并发 opencli 调用互踩/互删标签页(close-window 全灭 + active 租约竞争)</td></tr>
+<tr><td><b>生成页原位刷新 / 渐进细化</b></td><td>先骨架后完善;修订版更新已开 tab 而非新开进程(单 ux-server 多 spec 路由)</td></tr>
+</table>
+<p style="margin-top:.5rem;color:var(--mut)">再往后:opencli-ux 内核 vendor 进应用包(摆脱 ~/workspace 兄弟目录依赖)→ mac 打包分发 → iOS/Android/Linux 多端(e2b 沙箱 + CDP relay 的远端 seam 本轮已修通 tabId 绑定)。</p>
+</div>
+
+<footer>Render polish pass · commit 2705c53 · 审计:6 读者 + 117 验证 agent(39/39 确认)· 评审:4 lens + 60 验证 agent(10 确认回归已修)· proof: <code>pnpm --filter @render/desktop proof</code> ✅</footer>
+</body>
+</html>

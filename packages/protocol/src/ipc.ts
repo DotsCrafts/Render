@@ -18,7 +18,7 @@ export type AgentEvent =
   | { kind: 'delta'; itemId?: string; text: string }
   | { kind: 'reasoning'; itemId?: string; text: string }
   | { kind: 'ux'; message: UxMessage } // a render/form/confirm/login surfaced
-  | { kind: 'turn_completed'; status: string; durationMs?: number }
+  | { kind: 'turn_completed'; status: string; turnId?: string; durationMs?: number }
   | { kind: 'sandbox'; status: 'spawning' | 'ready' | 'closed'; provider: string }
   | { kind: 'error'; message: string };
 
@@ -143,7 +143,7 @@ export interface RenderApi {
   setPanelOpen(open: boolean): Promise<void>;
   /** hide/show native page views so a renderer modal isn't occluded by them */
   setOverlay(hidden: boolean): Promise<void>;
-  getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[] }>;
+  getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[]; resolvedUxIds?: string[] }>;
   /** Flip a delivered page to saved:true so it joins the Saved-Pages gallery. */
   savePage(id: string): Promise<SavedPageMeta | null>;
   /** List the saved pages (newest-first) for the gallery launcher. */

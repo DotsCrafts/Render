@@ -58,6 +58,14 @@ function isMultiLease(p: TargetProvider): p is MultiLeaseProvider {
 
 const NAV_TIMEOUT_MS = 15_000;
 const SETTLE_MS = 800;
+/**
+ * Cap on wait-download's caller-supplied timeout. The bridge serializes every
+ * command through one FIFO, so a single long download wait would block every
+ * other CLI client; the cap sits BELOW the bridge's 45s dispatch deadline so
+ * the graceful `{downloaded:false, state:'interrupted'}` shape always wins
+ * over the queue-level result-unknown timeout failure.
+ */
+const WAIT_DOWNLOAD_MAX_MS = 40_000;
 
 /** Resolve the target a command addresses (its `page` lease, or a fresh one). */
 async function resolveTarget(provider: TargetProvider, cmd: CommandFrame): Promise<CdpTarget> {
@@ -546,7 +554,10 @@ export async function handleWaitDownload(
   }
   const target = await resolveTarget(provider, cmd);
   const pattern = typeof cmd.pattern === 'string' ? cmd.pattern : '';
-  const timeoutMs = typeof cmd.timeoutMs === 'number' ? cmd.timeoutMs : 30_000;
+  const timeoutMs = Math.min(
+    typeof cmd.timeoutMs === 'number' ? cmd.timeoutMs : 30_000,
+    WAIT_DOWNLOAD_MAX_MS,
+  );
   const result = await waitForDownload(target, caps.download, pattern, timeoutMs);
   // NOT page-scoped (extension handler carries no page).
   return ok(cmd.id, result);

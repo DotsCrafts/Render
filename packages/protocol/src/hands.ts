@@ -15,6 +15,11 @@ export interface SandboxSpawnOptions {
   cwd?: string;
   /** env injected into the sandbox — NEVER web/site credentials (Plane 2) */
   env?: Record<string, string>;
+  /**
+   * exec-only deadline: kill the child on expiry and resolve with a synthetic
+   * non-zero ExecResult (exit 124, stderr notes the timeout). Unset = unbounded.
+   */
+  timeoutMs?: number;
 }
 
 export interface ExecResult {

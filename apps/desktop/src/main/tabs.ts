@@ -51,6 +51,8 @@ export class TabManager {
   private readonly tabs = new Map<string, Tab>();
   /** group id → group metadata (label/color), surfaced in every snapshot. */
   private readonly groups = new Map<string, TabGroupInfo>();
+  /** subscribers notified whenever a tab is torn down (close, crash reap, dispose). */
+  private readonly tabCloseSubs = new Set<(tabId: string) => void>();
   private order: string[] = [];
   private activeId: string | null = null;
   private panelOpen = true;
@@ -69,6 +71,19 @@ export class TabManager {
   /** Register (or update) a tab group so tabs can reference it by id. */
   ensureGroup(info: TabGroupInfo): void {
     this.groups.set(info.id, info);
+  }
+
+  /**
+   * Subscribe to tab teardown — fired for EVERY removal path (explicit close,
+   * out-of-band death reaped by snapshot, manager dispose). Lets owners of
+   * tab-scoped resources (e.g. a generated page's ux server) release them when
+   * their tab goes away. Returns an unsubscribe.
+   */
+  onTabClose(cb: (tabId: string) => void): () => void {
+    this.tabCloseSubs.add(cb);
+    return () => {
+      this.tabCloseSubs.delete(cb);
+    };
   }
 
   create(url?: string, opts: { activate?: boolean; groupId?: string } = {}): string {
@@ -126,6 +141,7 @@ export class TabManager {
       else this.create(); // never leave the user tab-less
     }
     this.emit();
+    this.notifyTabClosed(id);
   }
 
   activate(id: string): void {
@@ -217,6 +233,7 @@ export class TabManager {
   }
 
   dispose(): void {
+    const ids = [...this.tabs.keys()];
     for (const tab of this.tabs.values()) {
       try {
         this.window.contentView.removeChildView(tab.view);
@@ -228,6 +245,7 @@ export class TabManager {
     this.tabs.clear();
     this.order = [];
     this.activeId = null;
+    for (const id of ids) this.notifyTabClosed(id);
   }
 
   // ── internals ────────────────────────────────────────────────────────────────
@@ -259,6 +277,17 @@ export class TabManager {
     if (this.activeId === null) {
       const next = this.order[this.order.length - 1];
       if (next) this.activeId = next; // re-point without re-emitting (we're inside snapshot)
+    }
+    for (const tab of dead) this.notifyTabClosed(tab.id);
+  }
+
+  private notifyTabClosed(id: string): void {
+    for (const cb of this.tabCloseSubs) {
+      try {
+        cb(id);
+      } catch {
+        /* a subscriber failure must never break tab teardown */
+      }
     }
   }
 

@@ -1,5 +1,9 @@
 // Shown in place of a blocking surface once it has been resolved, so the human
 // can't double-submit and the panel keeps a record of what was decided.
+//
+// `result` may also be the literal "replayed": the host replayed a resolution
+// id after a renderer reload but the original UxResult is gone — the card
+// renders inert with a neutral note instead of re-arming.
 import type { UxKind, UxResult } from "@render/protocol";
 
 function summarize(kind: UxKind, result: UxResult): string {
@@ -18,9 +22,13 @@ function summarize(kind: UxKind, result: UxResult): string {
     case "ux_cancel":
       return kind === "form" ? "Form cancelled" : "Cancelled";
     case "login_done":
+      // loggedIn:false is the honest "Sign in" click: the host opened the login
+      // page but no session can be asserted yet — this is NOT a cancellation.
       return result.loggedIn
         ? `Logged in${result.account ? ` · ${result.account}` : ""}`
-        : "Login cancelled";
+        : "Sign-in page opened — finish there, then ask me to retry";
+    case "login_cancel":
+      return "Login cancelled";
     default:
       return "Resolved";
   }
@@ -31,13 +39,31 @@ export function ResolvedNote({
   result,
 }: {
   kind: UxKind;
-  result: UxResult;
+  result: UxResult | "replayed";
 }) {
+  if (result === "replayed") {
+    return (
+      <div className="text-sm flex items-center gap-2" style={{ color: "var(--fg-muted)" }}>
+        <span style={{ color: "var(--fg-subtle)" }}>✓</span>
+        <span>Resolved earlier</span>
+      </div>
+    );
+  }
   const cancelled = result.action === "ux_cancel" || result.action === "login_cancel";
+  // sign-in opened (login_done without a session yet) — in flight, not success
+  const opened = result.action === "login_done" && !result.loggedIn;
   return (
     <div className="text-sm flex items-center gap-2" style={{ color: "var(--fg-muted)" }}>
-      <span style={{ color: cancelled ? "var(--fg-subtle)" : "var(--success)" }}>
-        {cancelled ? "✕" : "✓"}
+      <span
+        style={{
+          color: cancelled
+            ? "var(--fg-subtle)"
+            : opened
+              ? "var(--fg-muted)"
+              : "var(--success)",
+        }}
+      >
+        {cancelled ? "✕" : opened ? "→" : "✓"}
       </span>
       <span>{summarize(kind, result)}</span>
     </div>
