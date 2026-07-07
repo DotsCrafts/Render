@@ -86,6 +86,13 @@ export interface AgentRuntimeDeps {
   /** subscribe to tab teardown — pairs with openTab for page-server disposal */
   onTabClose?: (cb: (tabId: string) => void) => () => void;
   /**
+   * Re-point an existing tab at a URL (or reload it when the URL is unchanged) —
+   * how a REVISED render-page lands in the tab it already owns instead of minting
+   * a new one. Returns false when the tab is gone, so the caller opens a fresh
+   * one instead.
+   */
+  navigateTab?: (tabId: string, url: string) => boolean;
+  /**
    * Register a conversation's tab group (label/color) with the TabManager when it
    * becomes active, so snapshots can render its chip even before the bridge mints
    * its first tab. Wired to `tabs.ensureGroup` by index.ts.
@@ -127,11 +134,38 @@ export interface AgentRuntimeDeps {
     allow: string;
     convId?: string;
   }) => string | undefined;
+  /**
+   * Persist a REVISION of an already-persisted page as a new version of the SAME
+   * store entry (Delta 5 addVersion), so Save captures the latest spec instead of
+   * littering the store with one draft per revision. Best-effort.
+   */
+  updatePage?: (id: string, input: { specJson: string; title?: string; allow?: string }) => void;
 }
 
 interface PendingHitl {
   requestId: number | string;
   kind: UxKind;
+}
+
+/**
+ * A delivered Tier-2 page: its serve handle plus everything needed to (a) reap
+ * its server when its tab closes and (b) REVISE it in place when the agent
+ * re-runs render-page with the same spec file. `convGen` scopes the identity to
+ * the conversation that delivered it — a later conversation reusing the same
+ * filename (`app.json` is common) mints a fresh page instead of overwriting.
+ */
+interface DeliveredPage {
+  page: UxPage;
+  /** abs spec path inside the sandbox — the AGENT-facing identity of the page */
+  file: string;
+  title: string;
+  allow: string;
+  /** conversation generation at delivery — gates same-file revision matching */
+  convGen: number;
+  /** the tab the page lives in — the HUMAN-facing surface to update in place */
+  tabId?: string;
+  /** pages-store id, so revisions persist as new versions of the same entry */
+  storeId?: string;
 }
 
 export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
@@ -184,13 +218,17 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   const pages: UxPage[] = [];
   // delivered page ↔ tab: closing the tab kills the page's server, so a day of
   // browsing doesn't accumulate zombie node processes (each an opencli-capable
-  // localhost server). Pages without a known tab still die in dispose().
-  const pageByTab = new Map<string, UxPage>();
+  // localhost server). ALSO the update-in-place registry: a render-page re-run
+  // whose SPEC FILE matches a live entry revises that page (same tab, same
+  // server identity) instead of minting a new tab. Keyed by tab (synthetic
+  // `page-N` when no tab id was available); entries survive conversation resets
+  // so tab-close still reaps old pages, but same-file matching is convGen-gated.
+  const pageByTab = new Map<string, DeliveredPage>();
   const offTabClose = deps.onTabClose?.((tabId) => {
-    const page = pageByTab.get(tabId);
-    if (!page) return;
+    const rec = pageByTab.get(tabId);
+    if (!rec) return;
     pageByTab.delete(tabId);
-    page.dispose();
+    rec.page.dispose();
   });
 
   /**
@@ -219,6 +257,84 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     }
   };
 
+  /**
+   * Revise an already-delivered page: re-serve the new spec through its UxPage
+   * (pooled backend hot-swaps at the same URL; per-page fallback re-serves at a
+   * new one), land it in the page's existing tab, persist a new version, drop an
+   * "Updated" card. Returns false when the page's server is gone — the caller
+   * then falls back to a fresh delivery.
+   */
+  const revisePage = async (
+    key: string,
+    rec: DeliveredPage,
+    inv: { file: string; title?: string; allow?: string },
+    specJson: string,
+  ): Promise<boolean> => {
+    const url = await rec.page.update({
+      specJson,
+      ...(inv.allow !== undefined ? { allow: inv.allow } : {}),
+    });
+    if (!url) {
+      // server died / revision unservable — retire the record so the fresh
+      // delivery below re-registers this spec file as a new page.
+      pageByTab.delete(key);
+      rec.page.dispose();
+      return false;
+    }
+    pageFailStreak = 0;
+    if (inv.title?.trim()) rec.title = inv.title.trim();
+    if (inv.allow !== undefined) rec.allow = inv.allow;
+    // Land the revision in the page's own tab: unchanged URL → loadURL reloads it.
+    // If the human closed that tab, open a fresh one and re-key the registry.
+    const navigated = rec.tabId ? deps.navigateTab?.(rec.tabId, url) === true : false;
+    if (!navigated) {
+      const opened = deps.openTab?.(url);
+      const tabId = typeof opened === 'string' ? opened : undefined;
+      pageByTab.delete(key);
+      if (tabId) rec.tabId = tabId;
+      pageByTab.set(tabId ?? key, rec);
+    }
+    try {
+      if (rec.storeId) {
+        deps.updatePage?.(rec.storeId, { specJson, title: rec.title, allow: rec.allow });
+      } else {
+        const pid = deps.persistPage?.({ specJson, title: rec.title, allow: rec.allow });
+        if (pid) rec.storeId = pid;
+      }
+    } catch (err) {
+      console.warn('[agent-runtime] persisting page revision failed:', errText(err));
+    }
+    deps.emit({
+      kind: 'ux',
+      message: {
+        id: `ux-page-${++uxSeq}`,
+        kind: 'render',
+        blocking: false,
+        ts: deps.now(),
+        ...(rec.storeId ? { page: { id: rec.storeId, title: rec.title } } : {}),
+        spec: {
+          title: `Updated app: ${rec.title}`,
+          body: 'The open page was revised in place.',
+          items: [{ title: rec.title, url }],
+        },
+      },
+    });
+    return true;
+  };
+
+  /**
+   * Deliveries are SERIALIZED: a rapid skeleton→refine pair must not race — the
+   * second run has to see the first run's pageByTab entry, or it would mint a
+   * second page/tab for the same spec file instead of revising the first.
+   */
+  let deliverChain: Promise<void> = Promise.resolve();
+  const enqueueDeliverPage = (inv: { file: string; title?: string; allow?: string }): void => {
+    deliverChain = deliverChain.then(
+      () => deliverPage(inv),
+      () => deliverPage(inv), // never let one failed delivery poison the chain
+    );
+  };
+
   const deliverPage = async (inv: { file: string; title?: string; allow?: string }): Promise<void> => {
     let specJson: string;
     try {
@@ -241,6 +357,13 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       return;
     }
 
+    // Same spec file as a page THIS conversation already delivered → revise it in
+    // place (skeleton→refine, or a post-hoc change) instead of minting a new tab.
+    const existing = [...pageByTab.entries()].find(
+      ([, p]) => p.file === inv.file && p.convGen === conversationGen,
+    );
+    if (existing && (await revisePage(existing[0], existing[1], inv, specJson))) return;
+
     const title = inv.title?.trim() || 'App';
     const page = serveUxSpec({
       specJson,
@@ -258,8 +381,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       return;
     }
     pageFailStreak = 0;
-    const tabId = deps.openTab?.(url);
-    if (typeof tabId === 'string') pageByTab.set(tabId, page);
+    const opened = deps.openTab?.(url);
+    const tabId = typeof opened === 'string' ? opened : undefined;
     // Delta 3: persist the spec so the human can Save + reopen it. The page is
     // pure given spec + allowlist, so re-serving reproduces it (data refetched
     // live). Best-effort — a persistence failure must not break the open.
@@ -270,6 +393,17 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     } catch (err) {
       console.warn('[agent-runtime] persistPage failed:', errText(err));
     }
+    // Register for tab-close reaping AND update-in-place: a later render-page with
+    // this same spec file revises this exact page/tab.
+    pageByTab.set(tabId ?? `page-${pageSeq}`, {
+      page,
+      file: inv.file,
+      title,
+      allow: inv.allow ?? '',
+      convGen: conversationGen,
+      ...(tabId ? { tabId } : {}),
+      ...(pageRef ? { storeId: pageRef.id } : {}),
+    });
     deps.emit({
       kind: 'ux',
       message: {
@@ -436,7 +570,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         // into the command's output (we read THAT, so shell quoting is collapsed).
         const pageInv = parseRenderPage(collectItemOutput(event.item));
         if (pageInv) {
-          void deliverPage(pageInv);
+          enqueueDeliverPage(pageInv);
           return; // don't also show the raw shim command row
         }
         // The agent ran opencli directly and it failed because the site needs a

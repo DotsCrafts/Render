@@ -8,6 +8,17 @@
 import { readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
+
+// `pool` = the pooled-kernel probe (docs/ux-pool-protocol.md). This fixture has
+// no pool support, so it does what an older ux.mjs does on an unknown command:
+// error out WITHOUT announcing `{"pooled":true}`. The ux-server probe treats
+// that clean exit as "not pool-capable" and falls back to per-page servers —
+// which is exactly the path these suites exercise.
+if (args[0] === 'pool') {
+  process.stderr.write('fake-ux: no pool mode\n');
+  process.exit(2);
+}
+
 const spec = JSON.parse(readFileSync(args[args.indexOf('--spec') + 1], 'utf8'));
 
 const stayAlive = () => setInterval(() => {}, 1000);

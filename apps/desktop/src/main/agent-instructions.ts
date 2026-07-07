@@ -169,6 +169,19 @@ Steps:
 
    \`--allow\` is the server-owned allowlist of \`<site> <command>\` pairs the page may
    run through \`/ux/data\` (READ commands; writes are default-rejected).
+3. **Revise in place — \`render-page\` is updatable.** Re-running \`render-page\`
+   with the SAME spec file UPDATES the already-open page/tab (no new tab, no new
+   app): edit the file, run the same command again. A DIFFERENT file path mints a
+   NEW page — reuse the path when revising, pick a new file only for a genuinely
+   different app.
+
+**Deliver EARLY, then refine.** Don't hold the page until the end of your turn.
+For anything data-heavy, run \`render-page\` as soon as the spec's skeleton exists —
+live-data components fetch on mount and show their own loading states, so the
+human gets a working page while you keep working. Then refine it: edit the same
+spec file (add sections, wire more data, fix layout) and re-run \`render-page\`
+after each meaningful revision. Use the same mechanism when the human asks for a
+change to a page you delivered earlier in the conversation.
 
 **Live data** — a component fetches by binding an \`on.mount\` (or an event like
 \`search\`) to the \`ux_data\` action, and binding its props to \`/data/<key>\` and
@@ -214,10 +227,10 @@ SearchPanel with on.search + queryPath, and Button on.press refreshes. Read it
 before authoring your first page.
 
 The page opens in its OWN tab, served at a local URL by the opencli-ux kernel.
-After running \`render-page\`, end your turn (optionally a one-line \`render\` block
-telling the user the app is open) — do NOT also dump the data as a card. If
-render-page FAILS, Render tells you why in a follow-up message — fix the spec
-or the \`--allow\` list and run it again.
+After your FINAL \`render-page\` of the turn, end the turn (optionally a one-line
+\`render\` block telling the user the app is open) — do NOT also dump the data as
+a card. If render-page FAILS, Render tells you why in a follow-up message — fix
+the spec or the \`--allow\` list and run it again.
 
 ## When you need a decision from the human — a \`block\` card
 
