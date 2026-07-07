@@ -123,11 +123,18 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
 
   // Saved render-pages (Delta 3): persist delivered page specs under userData so
   // they survive the conversation/app and can be reopened (re-served) live. The
-  // store re-serves via the SAME ux-server kernel the agent uses, under Render's
-  // bridge profile, so reopened pages drive the same logged-in session.
+  // store re-serves through the agent runtime's servePage (declared below —
+  // read lazily) so reopened pages get the same write-confirm broker and
+  // page-action forwarding as freshly delivered ones, under Render's bridge
+  // profile (the same logged-in session).
+  let agentRef: ReturnType<typeof createAgentRuntime> | null = null;
   const pagesStore = createPagesStore({
     userDataDir: app.getPath('userData'),
     ...(bridgeProfile ? { profile: bridgeProfile } : {}),
+    serve: (input) => {
+      if (!agentRef) return Promise.reject(new Error('agent runtime not ready'));
+      return agentRef.servePage(input);
+    },
     now: () => Date.now(),
   });
 
@@ -171,6 +178,7 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     },
     now: () => Date.now(),
   });
+  agentRef = agent;
 
   const broker = registerIpc({
     chrome: win.webContents,

@@ -25,12 +25,19 @@ const DENY_CHOICES = new Set([
   'cancel',
 ]);
 
+/**
+ * True ⇔ the human's confirm-card reply means "allow". Shared by the codex
+ * approval path below and the generated-page write-confirm broker (which has
+ * no codex request behind it — the verdict goes straight back to the kernel).
+ */
+export function uxConfirmAllows(result: UxResult): boolean {
+  const r = result as UxConfirmResult;
+  return r.action === 'ux_confirm' && !(typeof r.choice === 'string' && DENY_CHOICES.has(r.choice));
+}
+
 export function uxResultToCodexReply(kind: UxKind, result: UxResult): unknown {
   if (kind === 'confirm') {
-    const r = result as UxConfirmResult;
-    const denied =
-      r.action !== 'ux_confirm' || (typeof r.choice === 'string' && DENY_CHOICES.has(r.choice));
-    return { decision: denied ? 'cancel' : 'accept' };
+    return { decision: uxConfirmAllows(result) ? 'accept' : 'cancel' };
   }
 
   if (kind === 'form') {

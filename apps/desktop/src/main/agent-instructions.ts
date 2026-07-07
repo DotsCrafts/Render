@@ -168,6 +168,36 @@ Steps:
        render-page app.json --title "本地生活门户" --allow "agg search,coingecko top,dianping search"
 
    \`--allow\` is the server-owned allowlist of \`<site> <command>\` pairs the page may
+<<<<<<< HEAD
+   run through \`/ux/data\` (READ commands run directly; commands that CHANGE
+   things need \`--allow-write\`, below).
+
+### Page ACTIONS — the page can talk back to you, and (with grants) write
+
+A generated page is not read-only anymore. Two write paths:
+
+1. **Round-trip to YOU (preferred).** Bind a \`Button\`'s \`on.press\` to
+   \`ux_submit\` (sends the page's current state/form values) or \`ux_confirm\`
+   with \`params.choice\`. The click arrives as your NEXT user message, tagged
+   \`[page action]\` with the page title and the values — treat it as the user's
+   input: do the work with opencli (your own hands, full HITL applies) and
+   reply, or update the page with another \`render-page\`. The page stays open
+   and interactive after the click (no terminal "submitted" screen).
+
+       "orderBtn": { "type": "Button", "props": { "label": "下单" },
+                     "on": { "press": { "action": "ux_submit" } } }
+
+2. **Direct page writes (per-command grants).** If a page widget must run a
+   MUTATING opencli command itself (post, reply, buy, add-cart, send, …), grant
+   exactly those commands:
+
+       render-page app.json --title "…" --allow "dianping search" --allow-write "dianping reply"
+
+   \`--allow-write\` is per-command, like \`--allow\`. EVERY write invocation
+   pauses and asks the human to confirm in Render before it runs; ungranted or
+   unconfirmed writes are rejected. Grant ONLY the commands the page's buttons
+   actually use — never grant broadly.
+=======
    run through \`/ux/data\` (READ commands; writes are default-rejected).
 3. **Revise in place — \`render-page\` is updatable.** Re-running \`render-page\`
    with the SAME spec file UPDATES the already-open page/tab (no new tab, no new
@@ -182,6 +212,7 @@ human gets a working page while you keep working. Then refine it: edit the same
 spec file (add sections, wire more data, fix layout) and re-run \`render-page\`
 after each meaningful revision. Use the same mechanism when the human asks for a
 change to a page you delivered earlier in the conversation.
+>>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
 
 **Live data** — a component fetches by binding an \`on.mount\` (or an event like
 \`search\`) to the \`ux_data\` action, and binding its props to \`/data/<key>\` and
@@ -337,11 +368,12 @@ export async function installRenderOpen(sandbox: SandboxProvider, env?: Record<s
 export const RENDER_PAGE_SENTINEL = '__RENDER_PAGE__';
 
 /**
- * Install a `render-page <spec-file> --title "…" --allow "site cmd,…"` shim into
- * the sandbox bin dir. Like `render-open`, the shim only PRINTS a TAB-delimited
- * sentinel (the resolved absolute spec path + title + allowlist); the runtime
- * reads the json-render spec, serves it through the opencli-ux kernel (`ux render`)
- * and opens the URL in a tab. Resolving the path here (where the cwd is known)
+ * Install a `render-page <spec-file> --title "…" --allow "site cmd,…"
+ * [--allow-write "site cmd,…"]` shim into the sandbox bin dir. Like
+ * `render-open`, the shim only PRINTS a TAB-delimited sentinel (the resolved
+ * absolute spec path + title + allowlist + write grants); the runtime reads the
+ * json-render spec, serves it through the opencli-ux kernel (`ux render`) and
+ * opens the URL in a tab. Resolving the path here (where the cwd is known)
  * keeps the runtime parser dumb. Best-effort; reuses the render-open bin dir.
  */
 export async function installRenderPage(
@@ -356,15 +388,16 @@ export async function installRenderPage(
     `#!/bin/sh\n` +
     `f="$1"; shift\n` +
     `case "$f" in /*) abs="$f" ;; *) abs="$(pwd)/$f" ;; esac\n` +
-    `title=""; allow=""\n` +
+    `title=""; allow=""; allow_write=""\n` +
     `while [ $# -gt 0 ]; do\n` +
     `  case "$1" in\n` +
     `    --title) title="$2"; shift 2 ;;\n` +
     `    --allow) allow="$2"; shift 2 ;;\n` +
+    `    --allow-write) allow_write="$2"; shift 2 ;;\n` +
     `    *) shift ;;\n` +
     `  esac\n` +
     `done\n` +
-    `printf '${RENDER_PAGE_SENTINEL}\\t%s\\t%s\\t%s\\n' "$abs" "$title" "$allow"\n`;
+    `printf '${RENDER_PAGE_SENTINEL}\\t%s\\t%s\\t%s\\t%s\\n' "$abs" "$title" "$allow" "$allow_write"\n`;
   const cmd =
     `mkdir -p "${binDir}" && cat > "${binDir}/render-page" <<'RENDER_PAGE_EOF'\n${script}RENDER_PAGE_EOF\nchmod +x "${binDir}/render-page"`;
   try {
@@ -381,11 +414,14 @@ export interface RenderPageInvocation {
   title?: string;
   /** the `--allow "site cmd,…"` allowlist (raw string, passed to `ux render --allow`) */
   allow?: string;
+  /** per-command write grants (`--allow-write "site cmd,…"`) — each run human-confirmed */
+  allowWrite?: string;
 }
 
 /**
  * Parse a `render-page` sentinel line out of the agent's command output. Reads the
- * SENTINEL the shim printed: `__RENDER_PAGE__ \t <abs-spec-path> \t <title> \t <allow>`.
+ * SENTINEL the shim printed:
+ * `__RENDER_PAGE__ \t <abs-spec-path> \t <title> \t <allow> \t <allow-write>`.
  */
 export function parseRenderPage(output: string | undefined): RenderPageInvocation | null {
   if (!output) return null;
@@ -396,10 +432,12 @@ export function parseRenderPage(output: string | undefined): RenderPageInvocatio
   if (!file || !file.startsWith('/')) return null;
   const title = (parts[2] ?? '').trim() || undefined;
   const allow = (parts[3] ?? '').trim() || undefined;
+  const allowWrite = (parts[4] ?? '').trim() || undefined;
   return {
     file,
     ...(title ? { title } : {}),
     ...(allow ? { allow } : {}),
+    ...(allowWrite ? { allowWrite } : {}),
   };
 }
 
