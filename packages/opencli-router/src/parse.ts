@@ -21,7 +21,7 @@ export const AUTH_REQUIRED_EXIT = 77;
 export const BROWSER_CONNECT_EXIT = 69;
 
 /** The adapter phrases that signal "needs a logged-in session" in output text. */
-const AUTH_MESSAGE_RE = /AUTH_REQUIRED|Not logged in(?:to)?|Sign in at|Please .*log in/i;
+const AUTH_MESSAGE_RE = /AUTH_REQUIRED|Not logged in(?:to)?|Sign in at|Please .{0,200}log in/i;
 
 export function extractJson(stdout: string): unknown {
   const text = stdout.trim();
