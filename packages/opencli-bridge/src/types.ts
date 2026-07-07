@@ -73,6 +73,10 @@ export interface CommandFrame {
   surface?: 'browser' | 'adapter' | (string & {});
   /** opencli's tab lease handle == a CDP targetId; omitted on the first navigate. */
   page?: string;
+  /** Per-session idle-timeout override, in SECONDS (extension: sessionTimeoutOverrides). */
+  idleTimeout?: number;
+  /** Adapter-surface lifecycle override (extension: sessionLifecycleOverrides). */
+  siteSession?: 'persistent' | 'ephemeral' | (string & {});
   // action-specific fields (loosely typed — the daemon adds/removes these freely)
   url?: string;
   code?: string;

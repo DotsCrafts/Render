@@ -4,11 +4,24 @@ export { createSingleLeaseProvider } from './lease.js';
 export type { SingleLeaseDeps } from './lease.js';
 export { createMultiLeaseProvider } from './multi-lease.js';
 export type { MultiLeaseProvider, MultiLeaseDeps } from './multi-lease.js';
+export {
+  createSessionLeaseRegistry,
+  getLeaseKey,
+  leaseKeyForCommand,
+  LEASE_KEY_SEPARATOR,
+  IDLE_TIMEOUT_DEFAULT,
+  IDLE_TIMEOUT_INTERACTIVE,
+  IDLE_TIMEOUT_NONE,
+} from './session-registry.js';
+export type { SessionLeaseRegistry, SessionLeaseDeps } from './session-registry.js';
+export { createDispatchLanes } from './dispatch-lanes.js';
+export type { DispatchLanes } from './dispatch-lanes.js';
 export { createWebContentsTarget } from './webcontents-target.js';
 export type { WcContents, WcDebugger, WebContentsTargetDeps } from './webcontents-target.js';
 export {
   createWebContentsLeaseProvider,
   createMultiWebContentsLeaseProvider,
+  createSessionWebContentsLeaseProvider,
 } from './view-provider.js';
 export type { MintedView, WebContentsLeaseDeps } from './view-provider.js';
 export { createNetworkCaptureRegistry } from './network-capture.js';

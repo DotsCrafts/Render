@@ -35,7 +35,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   createOpencliBridge,
-  createMultiWebContentsLeaseProvider,
+  createSessionWebContentsLeaseProvider,
   createNetworkCaptureRegistry,
   RENDER_CONTEXT_ID,
   type BridgeHandle,
@@ -104,9 +104,15 @@ export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBrid
   // commands); an interactive flow like `<site> login` shows up there for the user
   // to click into rather than hijacking the foreground. The group is read at MINT
   // time, so tabs minted after a conversation switch join the new group.
+  //
+  // Leases are PARTITIONED PER OPENCLI SESSION (leaseKey = surface\0session):
+  // concurrent opencli runs each drive their own tab group registry, one run's
+  // `close-window` / idle timeout releases only its own tabs, and pageless
+  // commands resolve against their own session's active lease — never another
+  // run's. The registry's dispose() (bridge.stop()) still closes everything.
   const groupOf = deps.activeGroup ?? ((): TabGroupInfo => AGENT_GROUP);
   deps.tabs.ensureGroup(groupOf());
-  const provider = createMultiWebContentsLeaseProvider({
+  const provider = createSessionWebContentsLeaseProvider({
     mintView: async () => {
       const group = groupOf();
       // ensure the group is registered so its label/color are known to snapshots,

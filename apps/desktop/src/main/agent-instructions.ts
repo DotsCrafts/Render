@@ -434,7 +434,7 @@ export async function seedPortalExample(
     return false;
   }
   const workdir = sandbox.workdir();
-  const heredoc = `cat > "${workdir.replace(/"/g, '\\"')}/portal-example.json" <<'RENDER_EXAMPLE_EOF'\n${content}\nRENDER_EXAMPLE_EOF`;
+  const heredoc = `cat > "${workdir.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}/portal-example.json" <<'RENDER_EXAMPLE_EOF'\n${content}\nRENDER_EXAMPLE_EOF`;
   try {
     const res = await sandbox.exec('sh', ['-c', heredoc], { cwd: workdir, ...(env ? { env } : {}) });
     return res.exitCode === 0;
