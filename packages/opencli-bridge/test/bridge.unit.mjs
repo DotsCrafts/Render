@@ -545,6 +545,8 @@ function fakeDaemon() {
   return {
     url: () => `ws://127.0.0.1:${wss.address().port}/ext`,
     profiles: () => [...byContext.keys()].sort(),
+    /** contextId → live ws, so a test can forward Command frames like the daemon. */
+    sockets: () => byContext,
     close: () => new Promise((r) => wss.close(r)),
   };
 }
@@ -591,6 +593,64 @@ test('stop() leaves the daemon CLEAN — our profile is unregistered, no ghost',
   assert.equal(bridge.connected, false);
   assert.deepEqual(daemon.profiles(), [], 'no ghost profile may remain after stop()');
 
+  await daemon.close();
+});
+
+test('dispatch deadline: a never-resolving exec times out (result unknown) and the queue drains', async () => {
+  const daemon = fakeDaemon();
+
+  // A target whose exec for code 'HANG' never settles — the CDP promise just
+  // stays pending (hung fetch / open dialog); everything else answers normally.
+  const target = fakeTarget('PAGE1');
+  const rawSend = target.send;
+  target.send = (method, params) => {
+    if (method === 'Runtime.evaluate' && params.expression === 'HANG') {
+      return new Promise(() => {});
+    }
+    return rawSend(method, params);
+  };
+  const provider = { acquire: async () => target, current: () => target, dispose: async () => {} };
+
+  const bridge = createOpencliBridge({
+    provider,
+    daemonUrl: daemon.url(),
+    contextId: 'render-deadline-test',
+    autoReconnect: false,
+  });
+  await bridge.start();
+  await settle();
+
+  // Drive the bridge like the daemon does: forward command frames, collect results.
+  const bridgeWs = daemon.sockets().get('render-deadline-test');
+  const results = new Map();
+  bridgeWs.on('message', (raw) => {
+    const frame = JSON.parse(raw.toString());
+    if (frame.id) results.set(frame.id, frame);
+  });
+  const waitResult = async (id, timeoutMs = 3000) => {
+    const t0 = Date.now();
+    while (!results.has(id)) {
+      if (Date.now() - t0 > timeoutMs) throw new Error(`no result for ${id}`);
+      await settle(20);
+    }
+    return results.get(id);
+  };
+
+  // cmd.timeout is SECONDS on the wire (the CLI's own deadline) — honored, so
+  // the test runs in ~200ms instead of the 45s default.
+  bridgeWs.send(JSON.stringify({ id: 'hang-1', action: 'exec', code: 'HANG', timeout: 0.2 }));
+  const timedOut = await waitResult('hang-1');
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.errorCode, 'timeout');
+  assert.match(timedOut.error, /may still have (run|executed)/i, 'must read as result-UNKNOWN, not "did not run"');
+
+  // The queue must have drained: the NEXT command still gets a real result.
+  bridgeWs.send(JSON.stringify({ id: 'after-1', action: 'exec', code: '1+1' }));
+  const after = await waitResult('after-1');
+  assert.equal(after.ok, true, 'a hung command must not wedge the queue for the next one');
+  assert.equal(after.data, 'ok');
+
+  await bridge.stop();
   await daemon.close();
 });
 

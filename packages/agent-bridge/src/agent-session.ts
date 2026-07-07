@@ -16,13 +16,16 @@ import { EventEmitter } from 'node:events';
 import type {
   AgentEvent,
   ApprovalPolicy,
+  CodexNotification,
   CodexRequest,
   SandboxMode,
   SandboxProvider,
   ThreadStartResult,
+  TurnInputItem,
+  TurnSteerParams,
 } from '@render/protocol';
 import type { ApprovalDecision } from '@render/protocol';
-import { CODEX } from '@render/protocol';
+import { CODEX, CODEX_EVENT } from '@render/protocol';
 import { CodexClient, handshake } from './codex-client.js';
 import { type CodexHome, prepareCodexHome } from './codex-home.js';
 import { isHitlRequest, mapNotification, mapServerRequest } from './event-mapper.js';
@@ -70,6 +73,18 @@ interface PendingHitl {
   resolve: (result: unknown) => void;
   uxId: string;
 }
+
+/**
+ * Boot deadline for handshake + thread/start. A codex that spawns but never
+ * answers (bad binary, wedged provider config) would otherwise suspend
+ * `start()` forever — CodexClient.request has no timeout of its own.
+ */
+const BOOT_TIMEOUT_MS = 20_000;
+
+/** codex 0.136 wire shape for a text input item (`text_elements` is required
+ *  by the deserializer even when empty; the protocol type omits it). */
+const textInputItem = (text: string): TurnInputItem =>
+  ({ type: 'text', text, text_elements: [] }) as TurnInputItem;
 
 export class AgentSession {
   readonly #opts: AgentSessionOptions;
@@ -132,6 +147,7 @@ export class AgentSession {
       logRaw: this.#opts.logRaw,
       onServerRequest: (req) => this.#handleServerRequest(req),
       onNotification: (n) => {
+        this.#trackTurnLifecycle(n);
         const event = mapNotification(n);
         if (event) this.#emit(event);
       },
@@ -139,18 +155,52 @@ export class AgentSession {
     this.#client = client;
     client.on('exit', () => this.#emit({ kind: 'sandbox', status: 'closed', provider }));
 
-    await handshake(client, { name: 'render', version: '0.0.1' });
+    // Boot must fail loudly, not hang: a missing/broken codex binary rejects
+    // via the SandboxProcess error path, but a spawned-yet-mute codex would
+    // suspend these awaits forever without the deadline. On failure, kill the
+    // child so a half-booted app-server doesn't linger.
+    try {
+      await withDeadline(
+        handshake(client, { name: 'render', version: '0.0.1' }),
+        BOOT_TIMEOUT_MS,
+        'codex handshake',
+      );
 
-    const started = await client.request<ThreadStartResult>(CODEX.threadStart, {
-      cwd: workdir,
-      approvalPolicy: this.#opts.approvalPolicy ?? 'on-request',
-      sandbox: this.#opts.sandboxMode ?? 'workspace-write',
-      ...(this.#opts.model ? { model: this.#opts.model } : {}),
-      ...(this.#opts.modelProvider ? { modelProvider: this.#opts.modelProvider } : {}),
-    });
-    this.#threadId = started.thread.id;
-    this.#emit({ kind: 'sandbox', status: 'ready', provider });
-    return started;
+      const started = await withDeadline(
+        client.request<ThreadStartResult>(CODEX.threadStart, {
+          cwd: workdir,
+          approvalPolicy: this.#opts.approvalPolicy ?? 'on-request',
+          sandbox: this.#opts.sandboxMode ?? 'workspace-write',
+          ...(this.#opts.model ? { model: this.#opts.model } : {}),
+          ...(this.#opts.modelProvider ? { modelProvider: this.#opts.modelProvider } : {}),
+        }),
+        BOOT_TIMEOUT_MS,
+        'codex thread/start',
+      );
+      this.#threadId = started.thread.id;
+      this.#emit({ kind: 'sandbox', status: 'ready', provider });
+      return started;
+    } catch (err) {
+      client.close();
+      throw err;
+    }
+  }
+
+  /**
+   * Keep #activeTurnId honest from the raw notification stream: codex sets it
+   * on turn/started (covers resumed threads) and it must CLEAR when that turn
+   * completes — otherwise `activeTurnId` stays truthy forever after the first
+   * turn and hosts steer answers into a dead turn (silently losing them).
+   */
+  #trackTurnLifecycle(n: CodexNotification): void {
+    const p = (n.params ?? {}) as { turn?: { id?: string } };
+    if (n.method === CODEX_EVENT.turnStarted && p.turn?.id) {
+      this.#activeTurnId = p.turn.id;
+      return;
+    }
+    if (n.method === CODEX_EVENT.turnCompleted && p.turn?.id === this.#activeTurnId) {
+      this.#activeTurnId = '';
+    }
   }
 
   /** Kick a new turn. Resolves with the turnId once codex accepts it. */
@@ -158,7 +208,7 @@ export class AgentSession {
     const client = this.#require();
     const res = await client.request<{ turn: { id: string } }>(CODEX.turnStart, {
       threadId: this.#threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
+      input: [textInputItem(text)],
       ...(this.#opts.effort ? { effort: this.#opts.effort } : {}),
       ...(this.#opts.model ? { model: this.#opts.model } : {}),
     });
@@ -166,15 +216,20 @@ export class AgentSession {
     return { turnId: res.turn.id };
   }
 
-  /** Inject guidance into the currently active turn. */
+  /**
+   * Inject guidance into the currently active turn. Throws when no turn is
+   * live (also when codex rejects the expectedTurnId because the turn ended
+   * between our check and the RPC) — callers fall back to a fresh submit.
+   */
   async steer(text: string): Promise<void> {
     const client = this.#require();
     if (!this.#activeTurnId) throw new Error('steer: no active turn');
-    await client.request(CODEX.turnSteer, {
+    const params: TurnSteerParams = {
       threadId: this.#threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
+      input: [textInputItem(text)],
       expectedTurnId: this.#activeTurnId,
-    });
+    };
+    await client.request(CODEX.turnSteer, params);
   }
 
   /** Interrupt the active turn. */
@@ -185,6 +240,9 @@ export class AgentSession {
       threadId: this.#threadId,
       turnId: this.#activeTurnId,
     });
+    // The interrupted turn is dead — clear immediately rather than waiting for
+    // the turn/completed notification, so a steer can't target it in between.
+    this.#activeTurnId = '';
   }
 
   /**
@@ -232,5 +290,27 @@ export class AgentSession {
   #require(): CodexClient {
     if (!this.#client) throw new Error('AgentSession: start() not called');
     return this.#client;
+  }
+}
+
+/** Race a boot step against a deadline, always clearing the timer. */
+async function withDeadline<T>(step: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `${what} timed out after ${Math.round(timeoutMs / 1000)}s — ` +
+              'is the codex binary installed and responsive?',
+          ),
+        ),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([step, deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

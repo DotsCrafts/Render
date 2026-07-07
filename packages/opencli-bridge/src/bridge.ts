@@ -16,7 +16,7 @@
 
 import { WebSocket } from 'ws';
 import { dispatch, type DispatchCaps } from './actions.js';
-import { RENDER_CONTEXT_ID, errorToResult, helloFrame } from './protocol.js';
+import { RENDER_CONTEXT_ID, errorToResult, fail, helloFrame } from './protocol.js';
 import type {
   CommandFrame,
   FrameRecord,
@@ -29,6 +29,13 @@ const DEFAULT_DAEMON_URL = 'ws://127.0.0.1:19825/ext';
 const RECONNECT_DELAY_MS = 1_000;
 /** Max time stop() waits for the daemon to ACK our close (unregister our profile). */
 const CLOSE_GRACE_MS = 2_000;
+/**
+ * Dispatch deadline: no single command may hold the FIFO queue longer than
+ * this. The daemon forwards the CLI's whole command body, so frames usually
+ * carry `timeout` (SECONDS) — we honor it, capped, and default when absent.
+ */
+const DISPATCH_DEADLINE_DEFAULT_MS = 45_000;
+const DISPATCH_DEADLINE_MAX_MS = 60_000;
 
 export interface BridgeDeps {
   /** Owns + leases the CDP targets the bridge drives. */
@@ -93,10 +100,33 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
   // SINGLE Chromium and shares lease state (mint / select / navigate); dispatching
   // concurrently races that state and wedges the daemon after a burst — the root
   // cause of "first few commands work, then everything hangs". A FIFO chain
-  // serializes them. Every dispatch op is bounded (navigate/eval carry timeouts;
-  // login-wait is the adapter's own whoami polling, not one long bridge command),
-  // so no single command can stall the queue indefinitely.
+  // serializes them.
+  //
+  // NOT every dispatch op is intrinsically bounded: an exec whose promise never
+  // settles (a hung fetch, a never-matching selector poll, an open JS dialog)
+  // or a raw cdp forward can suspend forever, which would wedge the queue for
+  // EVERY subsequent command from every CLI client. So the queue runner races
+  // each dispatch against a hard deadline; on expiry it answers the command
+  // with a result-UNKNOWN timeout failure and lets the queue drain. The
+  // underlying CDP call is NOT cancelled — the page may still complete the
+  // action later — hence the "may still have run" wording (callers must not
+  // blindly retry real-world writes).
   let dispatchQueue: Promise<void> = Promise.resolve();
+  // Connection generation: queued-but-not-started commands from a PREVIOUS
+  // connection are skipped (their daemon socket is gone; running them would
+  // race the new connection's commands on shared lease state — worst case a
+  // stale queued close-window destroying the new session's tabs). The chain
+  // itself is never dropped while live: the per-dispatch deadline bounds the
+  // in-flight head, so the new connection's commands serialize behind at most
+  // one deadlined dispatch instead of racing a zombie.
+  let connectionGen = 0;
+
+  /** Deadline for one dispatch: the frame's `timeout` (seconds), capped. */
+  const dispatchDeadlineMs = (cmd: CommandFrame): number => {
+    const seconds = typeof cmd.timeout === 'number' && cmd.timeout > 0 ? cmd.timeout : undefined;
+    if (seconds === undefined) return DISPATCH_DEADLINE_DEFAULT_MS;
+    return Math.min(seconds * 1000, DISPATCH_DEADLINE_MAX_MS);
+  };
 
   const onMessage = (socket: WebSocket, raw: string): Promise<void> => {
     let cmd: CommandFrame;
@@ -107,13 +137,36 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
       return Promise.resolve();
     }
     record('RX', cmd);
+    const gen = connectionGen;
     const run = async (): Promise<void> => {
-      let result: ResultFrame;
-      try {
-        result = await dispatch(deps.provider, cmd, deps.caps ?? {});
-      } catch (err) {
-        result = errorToResult(cmd.id, err);
-      }
+      // stale queued command from a connection that has since gone away —
+      // skip it rather than racing the new connection's serialized work.
+      if (gen !== connectionGen) return;
+      // First settle wins: a raced-out dispatch that eventually resolves is
+      // dropped here (its result frame must not follow the timeout failure).
+      const deadlineMs = dispatchDeadlineMs(cmd);
+      const result = await new Promise<ResultFrame>((resolve) => {
+        const timer = setTimeout(() => {
+          resolve(
+            fail(
+              cmd.id,
+              `command timed out after ${Math.round(deadlineMs / 1000)}s — ` +
+                'the browser may still have executed it (result unknown)',
+              { errorCode: 'timeout' },
+            ),
+          );
+        }, deadlineMs);
+        dispatch(deps.provider, cmd, deps.caps ?? {}).then(
+          (r) => {
+            clearTimeout(timer);
+            resolve(r);
+          },
+          (err) => {
+            clearTimeout(timer);
+            resolve(errorToResult(cmd.id, err));
+          },
+        );
+      });
       record('TX', result);
       send(socket, result);
     };
@@ -141,6 +194,11 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
       ws = socket;
 
       socket.on('open', () => {
+        // Fresh connection: invalidate the OLD connection's queued-but-unstarted
+        // commands (see connectionGen) but keep the chain itself — an in-flight
+        // dispatch is deadline-bounded, and dropping the chain would let new
+        // commands race it on shared lease state.
+        connectionGen += 1;
         const hello = helloFrame(contextId);
         record('TX', hello);
         send(socket, hello);
@@ -206,6 +264,11 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    // Full teardown: invalidate queued commands AND drop the chain so a wedged
+    // in-flight dispatch can't poison a later start(); its late settle sends
+    // nothing (the old socket is closed) and the provider below is disposed.
+    connectionGen += 1;
+    dispatchQueue = Promise.resolve();
     const socket = ws;
     ws = null;
     if (socket) {

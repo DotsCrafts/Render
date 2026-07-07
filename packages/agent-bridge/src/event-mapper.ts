@@ -43,9 +43,12 @@ export function mapNotification(n: CodexNotification): AgentEvent | null {
     case CODEX_EVENT.reasoningDelta:
       return { kind: 'reasoning', itemId: p.itemId, text: p.delta ?? '' };
     case CODEX_EVENT.turnCompleted:
+      // turnId lets consumers correlate completion with the turn it ends (a
+      // single busy boolean misreports overlapping codex + /opencli turns).
       return {
         kind: 'turn_completed',
         status: p.turn?.status ?? 'unknown',
+        ...(p.turn?.id ? { turnId: p.turn.id } : {}),
         durationMs: p.turn?.durationMs,
       };
     case CODEX_EVENT.error:

@@ -59,8 +59,14 @@ export function detectOpencliAuthNeed(item: CodexItem): OpencliAuthNeed | null {
     typeof item.exitCode === 'number' && item.exitCode !== 0 && AUTH_TEXT.test(output);
   if (!authByExit && !authByText) return null;
 
+  // Prefer an explicit URL; else recover a scheme-less domain from opencli's
+  // documented phrasing ("… sign in to dianping.com in this profile") — the
+  // https:// regex alone misses that entirely, and downstream login handling
+  // no longer fabricates domains from slugs.
   const urlMatch = output.match(/https?:\/\/[^\s"')]+/);
-  return { site, ...(urlMatch ? { loginUrl: urlMatch[0] } : {}) };
+  if (urlMatch) return { site, loginUrl: urlMatch[0] };
+  const domainMatch = output.match(/sign in (?:at|to)\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)/i);
+  return { site, ...(domainMatch ? { loginUrl: `https://${domainMatch[1]}` } : {}) };
 }
 
 /** Pull the adapter alias out of a shell-wrapped `opencli <site> …` command. */

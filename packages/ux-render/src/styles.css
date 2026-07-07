@@ -347,6 +347,15 @@ button {
 .rd-step.muted .rd-step-key {
   color: var(--fg-faint);
 }
+/* a started-but-not-finished command: quiet pulsing ellipsis until the exit */
+.rd-step.pending .rd-step-val {
+  color: var(--fg-subtle);
+}
+.rd-step-run {
+  flex: none;
+  color: var(--command);
+  animation: rd-typing 1.2s infinite;
+}
 
 /* — elevated answer card — */
 .rd-answer {

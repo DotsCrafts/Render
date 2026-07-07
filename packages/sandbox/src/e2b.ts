@@ -67,15 +67,40 @@ export class E2bSandbox implements SandboxProvider {
   async exec(cmd: string, args: string[], opts: SandboxSpawnOptions = {}): Promise<ExecResult> {
     const sandbox = this.#require();
     const command = toCommand(cmd, args);
-    const runOpts = { cwd: opts.cwd ?? this.#cwd, envs: opts.env };
+    const runOpts = {
+      cwd: opts.cwd ?? this.#cwd,
+      envs: opts.env,
+      // Protocol deadline (SandboxSpawnOptions.timeoutMs): e2b kills the remote
+      // command itself on expiry — no local child to SIGTERM/SIGKILL. When
+      // unset we keep the SDK default rather than forcing unbounded.
+      ...(typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0
+        ? { timeoutMs: opts.timeoutMs }
+        : {}),
+    };
     try {
       const r = await sandbox.commands.run(command, { ...runOpts, background: false });
       return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
     } catch (e) {
       // e2b throws CommandExitError on non-zero exit; it carries the result.
-      const err = e as { exitCode?: number; stdout?: string; stderr?: string; message?: string };
+      const err = e as {
+        name?: string;
+        exitCode?: number;
+        stdout?: string;
+        stderr?: string;
+        message?: string;
+      };
       if (typeof err.exitCode === 'number') {
         return { exitCode: err.exitCode, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
+      }
+      // Deadline expiry surfaces as the SDK's TimeoutError (no exitCode). Map
+      // it to the synthetic exit 124 the protocol promises so callers see a
+      // normal failed ExecResult instead of a thrown transport error.
+      if (err.name === 'TimeoutError' || /timeout|timed out/i.test(err.message ?? '')) {
+        return {
+          exitCode: 124,
+          stdout: err.stdout ?? '',
+          stderr: `[render/sandbox] ${cmd} timed out and was killed (e2b): ${err.message ?? 'timeout'}`,
+        };
       }
       throw new Error(`e2b exec failed: ${err.message ?? String(e)}`);
     }

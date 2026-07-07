@@ -15,30 +15,60 @@ import type {
   UxRenderItem,
 } from '@render/protocol';
 
-const FENCE = /```(?:render|json)?\s*\n([\s\S]*?)```/gi;
+const FENCE = /```(render|json)?\s*\n([\s\S]*?)```/gi;
 // A ```block fence lets the agent raise a block-decision card (Delta 1): a
 // question + optional choices + an inline free-text steer field. Scanned BEFORE
 // the render fence so a turn that needs a decision surfaces as a `block`, not a
 // terminal `render` card.
 const BLOCK_FENCE = /```block\s*\n([\s\S]*?)```/gi;
 
-/** Find the last ```render / ```json block that parses into a render-shaped object. */
-export function extractRenderSpec(text: string): UxRenderSpec | null {
-  const blocks: string[] = [];
-  for (const m of text.matchAll(FENCE)) if (m[1]) blocks.push(m[1]);
-  // also accept a whole-message bare JSON object
-  if (blocks.length === 0) {
-    const trimmed = text.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) blocks.push(trimmed);
+interface ExtractedSpec {
+  spec: UxRenderSpec;
+  /** the exact source text (full fence / bare object) the spec was parsed from */
+  consumed: string;
+}
+
+/**
+ * Find the last fenced block that parses into a render spec. A ```render fence
+ * is always a spec candidate (the LENIENT simple shape is allowed). A ```json
+ * or untagged fence is only treated as a MISLABELED spec when the fence is
+ * essentially the whole message — a json blob quoted inside a prose answer must
+ * stay prose (and is NOT deleted: only the consumed source is stripped from the
+ * fallback body). The strict json-render shape ({root, elements}) is accepted
+ * from any fence.
+ */
+export function extractAnswerSpec(text: string): ExtractedSpec | null {
+  const surroundingProse = text.replace(FENCE, '').trim();
+  const candidates: Array<{ raw: string; consumed: string; lenient: boolean }> = [];
+  for (const m of text.matchAll(FENCE)) {
+    if (!m[2]) continue;
+    const tag = (m[1] ?? '').toLowerCase();
+    candidates.push({
+      raw: m[2],
+      consumed: m[0],
+      lenient: tag === 'render' || surroundingProse.length < 40,
+    });
   }
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const spec = coerceRenderSpec(blocks[i]);
-    if (spec) return spec;
+  // also accept a whole-message bare JSON object
+  if (candidates.length === 0) {
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      candidates.push({ raw: trimmed, consumed: trimmed, lenient: true });
+    }
+  }
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const spec = coerceRenderSpec(candidates[i].raw, candidates[i].lenient);
+    if (spec) return { spec, consumed: candidates[i].consumed };
   }
   return null;
 }
 
-function coerceRenderSpec(raw: string): UxRenderSpec | null {
+/** Back-compat convenience over extractAnswerSpec. */
+export function extractRenderSpec(text: string): UxRenderSpec | null {
+  return extractAnswerSpec(text)?.spec ?? null;
+}
+
+function coerceRenderSpec(raw: string, lenient: boolean): UxRenderSpec | null {
   let obj: unknown;
   try {
     obj = JSON.parse(raw);
@@ -52,14 +82,15 @@ function coerceRenderSpec(raw: string): UxRenderSpec | null {
   if (typeof o.root === 'string' && o.elements && typeof o.elements === 'object') {
     return { ui: o, body: harvestText(o.elements as Record<string, unknown>) };
   }
-  const hasShape =
-    typeof o.title === 'string' || typeof o.body === 'string' || Array.isArray(o.items);
-  if (!hasShape) return null;
+  if (!lenient) return null;
   const spec: UxRenderSpec = {};
   if (typeof o.title === 'string') spec.title = o.title;
   if (typeof o.body === 'string') spec.body = o.body;
   if (Array.isArray(o.items)) spec.items = o.items.map(coerceItem).filter(Boolean) as UxRenderItem[];
-  return spec;
+  // an "items" array whose entries all failed coercion must not become an
+  // entirely blank card — require some surviving content.
+  const hasContent = !!spec.title || !!spec.body || (spec.items?.length ?? 0) > 0;
+  return hasContent ? spec : null;
 }
 
 function coerceItem(v: unknown): UxRenderItem | null {
@@ -153,7 +184,28 @@ export function answerToUxMessage(text: string, id: string, ts: number): UxMessa
   if (block) {
     return { id, kind: 'block', blocking: false, ts, spec: block };
   }
-  const parsed = extractRenderSpec(text);
-  const spec: UxRenderSpec = parsed ?? { body: stripFences(text) || text.trim() };
+  const found = extractAnswerSpec(text);
+  if (found) {
+    // Nothing the agent wrote is dropped: prose surrounding the consumed spec
+    // joins the card body (a simple-shape spec often arrives with a sentence
+    // of framing prose the user should still see).
+    const prose = text.replace(found.consumed, '').replace(FENCE, '').trim();
+    if (found.spec.ui || !prose) {
+      return { id, kind: 'render', blocking: false, ts, spec: found.spec };
+    }
+    const body = [prose, found.spec.body].filter(Boolean).join('\n\n');
+    return { id, kind: 'render', blocking: false, ts, spec: { ...found.spec, body } };
+  }
+  // No parseable spec. Keep the FULL text — including any fence that failed
+  // coercion (deleting a quoted/mislabeled json blob would silently discard
+  // data the agent fetched). Only a fence-only answer with no prose at all
+  // gets the friendly failure card instead of a raw JSON echo.
+  const prose = stripFences(text);
+  const spec: UxRenderSpec = prose
+    ? { body: text.trim() }
+    : {
+        title: 'Answer could not be displayed',
+        body: 'The agent produced a layout that failed to parse. Ask it to try again.',
+      };
   return { id, kind: 'render', blocking: false, ts, spec };
 }
