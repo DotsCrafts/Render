@@ -126,10 +126,11 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
   const plainProvider = registry ? null : (deps.provider as TargetProvider);
 
   /** Deadline for one dispatch: the frame's `timeout` (seconds, capped), or the configured default. */
-  const cmdDeadlineMs = (cmd: CommandFrame): number => {
+  const cmdDeadline = (cmd: CommandFrame): { ms: number; fromCmd: boolean } => {
     const seconds = typeof cmd.timeout === 'number' && cmd.timeout > 0 ? cmd.timeout : undefined;
-    if (seconds !== undefined) return Math.min(seconds * 1000, DISPATCH_DEADLINE_MAX_MS);
-    return deps.dispatchDeadlineMs ?? DISPATCH_DEADLINE_DEFAULT_MS;
+    if (seconds !== undefined)
+      return { ms: Math.min(seconds * 1000, DISPATCH_DEADLINE_MAX_MS), fromCmd: true };
+    return { ms: deps.dispatchDeadlineMs ?? DISPATCH_DEADLINE_DEFAULT_MS, fromCmd: false };
   };
 
   const onMessage = (socket: WebSocket, raw: string): Promise<void> => {
@@ -145,7 +146,8 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
       let result: ResultFrame;
       try {
         const provider = registry ? registry.providerFor(cmd) : plainProvider!;
-        result = await withDeadline(cmd.id, cmdDeadlineMs(cmd), dispatch(provider, cmd, deps.caps ?? {}));
+        const { ms, fromCmd } = cmdDeadline(cmd);
+        result = await withDeadline(cmd.id, ms, fromCmd, dispatch(provider, cmd, deps.caps ?? {}));
         // completion counts as activity too, so a command longer than the idle
         // timeout doesn't get its session reaped right at the finish line.
         registry?.touch(cmd);
@@ -281,6 +283,7 @@ function isLeaseMutating(cmd: CommandFrame): boolean {
 function withDeadline(
   id: string,
   ms: number,
+  fromCmd: boolean,
   work: Promise<ResultFrame>,
 ): Promise<ResultFrame> {
   // If the deadline wins, `work` is abandoned; pre-handle its rejection so a
@@ -289,9 +292,18 @@ function withDeadline(
   let timer: NodeJS.Timeout;
   const deadline = new Promise<ResultFrame>((resolve) => {
     timer = setTimeout(() => {
-      resolve(
-        fail(id, `dispatch deadline exceeded after ${ms}ms`, { errorCode: 'dispatch_deadline' }),
-      );
+      // Distinguish the source so callers can tell whether the command's own
+      // timeout was exceeded (result unknown — the browser may have acted) vs.
+      // the bridge's safety deadline (dispatch_deadline — internal watermark).
+      const result = fromCmd
+        ? fail(
+            id,
+            `command timed out after ${Math.round(ms / 1000)}s — ` +
+              'the browser may still have executed it (result unknown)',
+            { errorCode: 'timeout' },
+          )
+        : fail(id, `dispatch deadline exceeded after ${ms}ms`, { errorCode: 'dispatch_deadline' });
+      resolve(result);
     }, ms);
     timer.unref?.();
   });
