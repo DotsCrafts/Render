@@ -2,49 +2,43 @@
  * ux-server — serve json-render specs through the opencli-ux kernel.
  *
  * The unified page-generation path (Option B). The agent produces a json-render
-<<<<<<< HEAD
- * SPEC (catalog-whitelisted), and Render serves it via `ux render --spec … --keep
- * --allow … --no-open` (the same kernel the home portal uses), then opens the URL
- * as a normal tab. No isolated artifact partition, no custom renderArtifact bridge:
- * the page is a real localhost app whose backend reach is the ux server's
- * token-gated /ux/data — reads via `--allow`, writes only via per-command
- * `--allow-write` grants that the kernel brokers through Render's confirm
- * endpoint (one human approval per invocation). Reused by home-portal (the home
- * page) and the agent's `render-page` tool (generated pages).
- *
- * WRITE PATH (genpage-write-path): `ux render --keep` emits every /ux/callback
- * payload the page posts (ux_submit / ux_confirm) as a JSONL line on stdout
- * after the announce line. We keep parsing stdout and hand each payload to
- * `onCallback`, which the agent-runtime forwards into the conversation.
-=======
  * SPEC (catalog-whitelisted) and Render serves it via the opencli-ux kernel, then
  * opens the URL as a normal tab. No isolated artifact partition, no custom
  * renderArtifact bridge: the page is a real localhost app whose only backend
- * reach is the ux server's token-gated /ux/data. Reused by home-portal (the home
- * page), pages-store (reopen) and the agent's `render-page` tool.
+ * reach is the ux server's token-gated /ux/data — reads via `--allow`, writes
+ * only via per-command `--allow-write` grants the kernel brokers through Render's
+ * confirm endpoint (one human approval per invocation). Reused by home-portal
+ * (the home page), pages-store (reopen) and the agent's `render-page` tool.
  *
  * `watchUxChild` is the single child-readiness watcher shared with home-portal:
  * it scans stdout for the one-line JSON announce, keeps a stderr tail for
  * failure diagnostics, and bounds the wait with a hard deadline so a child that
- * neither announces nor exits can never suspend a caller forever.
+ * neither announces nor exits can never suspend a caller forever. In keep mode
+ * it ALSO forwards every post-announce JSONL line (a /ux/callback payload) to
+ * `onCallback` — the WRITE PATH: `ux render --keep` streams each page action
+ * (ux_submit / ux_confirm) so the agent-runtime can forward it into the
+ * conversation.
  *
  * Pages served here are UPDATABLE: `UxPage.update()` re-serves a revised spec
  * through the same page identity, which is what lets the agent deliver a
  * skeleton early and refine it, or revise an already-delivered page, without
  * minting a new tab. Two backends implement that behind one interface:
  *
- *   • POOLED (preferred): ONE long-lived `ux.mjs pool` process serves MANY specs,
- *     one per route. Adding/revising a page is a `set` op over the pool's stdin
- *     (JSONL) and the page URL is STABLE across revisions, so an update is just a
- *     tab reload — no per-page process at all. Probed once per app run; the
- *     contract ux.mjs implements is docs/ux-pool-protocol.md.
+ *   • POOLED (preferred, read-only): ONE long-lived `ux.mjs pool` process serves
+ *     MANY specs, one per route. Adding/revising a page is a `set` op over the
+ *     pool's stdin (JSONL) and the page URL is STABLE across revisions, so an
+ *     update is just a tab reload — no per-page process at all. Probed once per
+ *     app run; the contract ux.mjs implements is docs/ux-pool-protocol.md. The
+ *     pool `set` protocol carries no per-page callback/confirm channel, so a page
+ *     that needs the WRITE PATH (onCallback / confirm / allowWrite) is routed to
+ *     per-page instead — see serveUxSpec.
  *
- *   • PER-PAGE (fallback — an ux.mjs without pool mode): each spec revision gets
+ *   • PER-PAGE (fallback + all write/interactive pages): each spec revision gets
  *     its own `ux render --spec … --keep` process (`watchUxChild` above).
  *     update() spawns a REPLACEMENT server for the revised spec, waits for its
  *     URL, then retires the old process — the URL changes, so the caller
- *     re-points the page's tab.
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
+ *     re-points the page's tab. This is the path with the stdout-JSONL callback
+ *     stream and the env-injected confirm broker.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -86,12 +80,6 @@ export interface UxChild {
   dispose(): void;
 }
 
-<<<<<<< HEAD
-const DISABLED: UxPage = {
-  url: null,
-  session: null,
-  whenReady: () => Promise.resolve(null),
-=======
 /**
  * A served, UPDATABLE page — a `UxChild` plus `update()`. `serveUxSpec` and
  * `pages-store.reopen` return this; the agent runtime revises pages through it.
@@ -103,102 +91,38 @@ export interface UxPage extends UxChild {
    * caller must re-point the tab to — or null when the revision could not be
    * served (the previous revision keeps serving where possible).
    */
-  update(next: { specJson: string; allow?: string }): Promise<string | null>;
+  update(next: { specJson: string; allow?: string; allowWrite?: string }): Promise<string | null>;
 }
 
 const DISABLED: UxPage = {
   url: null,
+  session: null,
   whenReady: () => Promise.resolve(null),
   stderrTail: () => '',
   update: () => Promise.resolve(null),
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
   dispose() {},
 };
 
 /**
-<<<<<<< HEAD
- * Spawn a long-lived `ux render --spec` server for a json-render spec and resolve
- * its URL. `argv` is `[uxMjs, 'render', '--spec', file, '--keep', '--allow', allow,
- * ('--allow-write', allowWrite,) '--no-open']`. Best-effort: disabled cleanly if
- * ux.mjs is missing or the spec can't be written.
- */
-export function serveUxSpec(opts: {
-  /** the json-render spec, as a JSON string */
-  specJson: string;
-  /** server-owned allowlist: "<site> <command>,…" the page may run via /ux/data */
-  allow: string;
-  /**
-   * per-command WRITE grants "<site> <command>,…" — each invocation is brokered
-   * through `confirm` before it runs (no confirm endpoint ⇒ the kernel refuses
-   * all writes, fail closed).
-   */
-  allowWrite?: string;
-  /** Render's confirm-broker endpoint + token, injected into the kernel's env */
-  confirm?: { url: string; token: string };
-  /**
-   * receives every page action the kernel streams after the announce line
-   * (keep-mode JSONL: ux_submit values / ux_confirm choice / …).
-   */
-  onCallback?: (payload: unknown) => void;
-  /** OPENCLI_PROFILE the ux server runs under (Render's bridge profile) */
-  profile?: string;
-  /** unique tag for the temp spec file name */
-  idTag: string;
-}): UxPage {
-  const uxMjs = resolveUxMjs();
-  if (!uxMjs) {
-    console.warn('[ux-server] ux.mjs not found — page disabled.');
-    return DISABLED;
-  }
-  // ux.mjs --spec reads a FILE path; write the agent's spec to a temp file.
-  const specFile = join(tmpdir(), `render-page-${opts.idTag}.json`);
-  try {
-    writeFileSync(specFile, opts.specJson);
-  } catch (err) {
-    console.warn('[ux-server] failed to write spec file:', String(err));
-    return DISABLED;
-  }
-
-  const profile = opts.profile || process.env.OPENCLI_PROFILE || 'render';
-  const allowWrite = opts.allowWrite?.trim();
-  const argv = [uxMjs, 'render', '--spec', specFile, '--keep', '--allow', opts.allow];
-  if (allowWrite) argv.push('--allow-write', allowWrite);
-  argv.push('--no-open');
-  const env: NodeJS.ProcessEnv = { ...process.env, OPENCLI_PROFILE: profile };
-  if (opts.confirm) {
-    env.OPENCLI_UX_CONFIRM_URL = opts.confirm.url;
-    env.OPENCLI_UX_CONFIRM_TOKEN = opts.confirm.token;
-  } else {
-    // never inherit a stale broker from Render's own environment
-    delete env.OPENCLI_UX_CONFIRM_URL;
-    delete env.OPENCLI_UX_CONFIRM_TOKEN;
-  }
-  let child: ChildProcess | null = null;
-  try {
-    child = spawn('node', argv, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (err) {
-    console.warn('[ux-server] failed to spawn ux render:', String(err));
-    return DISABLED;
-  }
-
-  let url: string | null = null;
-  let session: string | null = null;
-=======
  * Watch a spawned ux child for its one-line JSON announce (`{"url": …}`) on
  * stdout. Iterates over ALL complete lines and slices consumed data off the
  * buffer — a banner line before the announce is skipped, never re-parsed
  * forever (the old scanner wedged on the first non-JSON line). Readiness is
  * bounded: if the child neither announces nor exits within `deadlineMs`, the
  * ready promise resolves null and the child is killed.
+ *
+ * When `onCallback` is set (keep mode), parsing does NOT stop at the announce:
+ * every subsequent JSONL line is a /ux/callback payload the page posted, handed
+ * to `onCallback` so the runtime can forward the page action into the agent.
  */
 export function watchUxChild(
   child: ChildProcess,
-  opts: { label: string; deadlineMs?: number; onDispose?: () => void },
+  opts: { label: string; deadlineMs?: number; onDispose?: () => void; onCallback?: (payload: unknown) => void },
 ): UxChild {
   let url: string | null = null;
+  let session: string | null = null;
   let stderrBuf = '';
   let settled = false;
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
   let resolveReady!: (u: string | null) => void;
   const ready = new Promise<string | null>((r) => {
     resolveReady = r;
@@ -223,16 +147,11 @@ export function watchUxChild(
     }
   }, deadlineMs);
 
-<<<<<<< HEAD
-  // ux render --keep announces `{"rendered":true,"url":"…","keep":true}` on its
-  // FIRST stdout line, then streams one JSONL line per page action (/ux/callback
-  // payload). Keep parsing past the announce and forward each payload.
-=======
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
   let buf = '';
   child.stdout?.on('data', (d: Buffer) => {
+    // Once ready, only keep reading when a callback sink wants the JSONL stream.
+    if (url && !opts.onCallback) return;
     buf += d.toString();
-<<<<<<< HEAD
     let nl: number;
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl).trim();
@@ -242,38 +161,24 @@ export function watchUxChild(
       try {
         j = JSON.parse(line);
       } catch {
-        continue; // stray non-JSON noise — never kills the stream
+        continue; // non-JSON banner / stray noise — skip it, never wedge
       }
       if (!url) {
         const a = j as { url?: unknown; session?: unknown };
         if (a && typeof a.url === 'string') {
           url = a.url;
           if (typeof a.session === 'string') session = a.session;
-          resolveReady(url);
+          settle(url);
+          if (!opts.onCallback) return; // no callback sink — stop reading stdout
         }
         continue;
       }
+      // post-announce JSONL: a /ux/callback payload (keep-mode page action).
       try {
         opts.onCallback?.(j);
       } catch (err) {
-        console.warn('[ux-server] onCallback failed:', String(err));
+        console.warn(`[${opts.label}] onCallback failed:`, String(err));
       }
-=======
-    let nl = buf.indexOf('\n');
-    while (nl >= 0 && !url) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
-      try {
-        const j = JSON.parse(line) as { url?: unknown };
-        if (j && typeof j.url === 'string') {
-          url = j.url;
-          settle(url);
-        }
-      } catch {
-        /* non-JSON banner line — skip it and keep scanning */
-      }
-      nl = buf.indexOf('\n');
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
     }
   });
 
@@ -328,6 +233,20 @@ export interface ServeUxSpecOpts {
   specJson: string;
   /** server-owned allowlist: "<site> <command>,…" the page may run via /ux/data */
   allow: string;
+  /**
+   * per-command WRITE grants "<site> <command>,…" — each invocation is brokered
+   * through `confirm` before it runs (no confirm endpoint ⇒ the kernel refuses
+   * all writes, fail closed). Presence forces the per-page backend.
+   */
+  allowWrite?: string;
+  /** Render's confirm-broker endpoint + token, injected into the kernel's env. */
+  confirm?: { url: string; token: string };
+  /**
+   * receives every page action the kernel streams after the announce line
+   * (keep-mode JSONL: ux_submit values / ux_confirm choice / …). Presence forces
+   * the per-page backend (the pool `set` protocol has no callback channel).
+   */
+  onCallback?: (payload: unknown) => void;
   /** OPENCLI_PROFILE the ux server runs under (Render's bridge profile) */
   profile?: string;
   /** unique tag for the temp spec file name / pool route */
@@ -336,21 +255,57 @@ export interface ServeUxSpecOpts {
   readyTimeoutMs?: number;
 }
 
+/** True when a spec needs the per-page WRITE PATH (pool can't carry it). */
+function needsPerPage(opts: ServeUxSpecOpts): boolean {
+  return !!(opts.onCallback || opts.confirm || opts.allowWrite?.trim());
+}
+
+/** Build the `ux render --keep` argv, adding `--allow-write` when grants exist. */
+function renderArgv(uxMjs: string, specFile: string, allow: string, allowWrite?: string): string[] {
+  const argv = [uxMjs, 'render', '--spec', specFile, '--keep', '--allow', allow];
+  if (allowWrite?.trim()) argv.push('--allow-write', allowWrite.trim());
+  argv.push('--no-open');
+  return argv;
+}
+
+/** The kernel env: bridge profile + (when confirming writes) the confirm broker. */
+function childEnv(profile: string, confirm?: { url: string; token: string }): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, OPENCLI_PROFILE: profile };
+  if (confirm) {
+    env.OPENCLI_UX_CONFIRM_URL = confirm.url;
+    env.OPENCLI_UX_CONFIRM_TOKEN = confirm.token;
+  } else {
+    // never inherit a stale broker from Render's own environment
+    delete env.OPENCLI_UX_CONFIRM_URL;
+    delete env.OPENCLI_UX_CONFIRM_TOKEN;
+  }
+  return env;
+}
+
+interface PerPageChildOpts {
+  allow: string;
+  allowWrite?: string;
+  profile: string;
+  tag: string;
+  confirm?: { url: string; token: string };
+  onCallback?: (payload: unknown) => void;
+  readyTimeoutMs?: number;
+}
+
 /**
  * Spawn a single `ux render --spec … --keep` child for one spec revision and
  * watch it to readiness. The temp spec file is one-shot input (ux.mjs reads it
  * at startup) and is unlinked on dispose so it doesn't accrete in tmpdir.
  */
-function spawnPerPageChild(
-  uxMjs: string,
-  specJson: string,
-  allow: string,
-  profile: string,
-  tag: string,
-  readyTimeoutMs?: number,
-): UxChild {
-  const dead: UxChild = { url: null, whenReady: () => Promise.resolve(null), stderrTail: () => '', dispose() {} };
-  const specFile = join(tmpdir(), `render-page-${tag}.json`);
+function spawnPerPageChild(uxMjs: string, specJson: string, o: PerPageChildOpts): UxChild {
+  const dead: UxChild = {
+    url: null,
+    session: null,
+    whenReady: () => Promise.resolve(null),
+    stderrTail: () => '',
+    dispose() {},
+  };
+  const specFile = join(tmpdir(), `render-page-${o.tag}.json`);
   try {
     writeFileSync(specFile, specJson);
   } catch (err) {
@@ -360,11 +315,10 @@ function spawnPerPageChild(
 
   let child: ChildProcess;
   try {
-    child = spawn(
-      'node',
-      [uxMjs, 'render', '--spec', specFile, '--keep', '--allow', allow, '--no-open'],
-      { env: { ...process.env, OPENCLI_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    child = spawn('node', renderArgv(uxMjs, specFile, o.allow, o.allowWrite), {
+      env: childEnv(o.profile, o.confirm),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
   } catch (err) {
     console.warn('[ux-server] failed to spawn ux render:', String(err));
     try {
@@ -377,7 +331,8 @@ function spawnPerPageChild(
 
   return watchUxChild(child, {
     label: 'ux-server',
-    ...(readyTimeoutMs !== undefined ? { deadlineMs: readyTimeoutMs } : {}),
+    ...(o.readyTimeoutMs !== undefined ? { deadlineMs: o.readyTimeoutMs } : {}),
+    ...(o.onCallback ? { onCallback: o.onCallback } : {}),
     onDispose: () => {
       try {
         unlinkSync(specFile);
@@ -393,13 +348,23 @@ function spawnPerPageChild(
  * the revised spec, wait for its URL, retire the old process. The old revision
  * keeps serving until the new one is up, so a failed revision never takes the
  * page down — but the URL changes on success, so the caller re-points the tab.
- * url/stderrTail delegate to the CURRENT child so the runtime's error path reads
- * the live child's diagnostics.
+ * url/session/stderrTail delegate to the CURRENT child so the runtime reads the
+ * live child's state.
  */
 function perPagePage(uxMjs: string, opts: ServeUxSpecOpts, profile: string): UxPage {
   let rev = 0;
   let allow = opts.allow;
-  let current = spawnPerPageChild(uxMjs, opts.specJson, allow, profile, opts.idTag, opts.readyTimeoutMs);
+  let allowWrite = opts.allowWrite;
+  const childOpts = (tag: string): PerPageChildOpts => ({
+    allow,
+    ...(allowWrite ? { allowWrite } : {}),
+    profile,
+    tag,
+    ...(opts.confirm ? { confirm: opts.confirm } : {}),
+    ...(opts.onCallback ? { onCallback: opts.onCallback } : {}),
+    ...(opts.readyTimeoutMs !== undefined ? { readyTimeoutMs: opts.readyTimeoutMs } : {}),
+  });
+  let current = spawnPerPageChild(uxMjs, opts.specJson, childOpts(opts.idTag));
   let disposed = false;
   const ready = current.whenReady();
   // updates are serialized: each waits for the previous serve/update to settle.
@@ -409,20 +374,17 @@ function perPagePage(uxMjs: string, opts: ServeUxSpecOpts, profile: string): UxP
     get url() {
       return current.url;
     },
+    get session() {
+      return current.session;
+    },
     whenReady: () => ready,
     stderrTail: () => current.stderrTail(),
     update(next) {
       chain = chain.then(async () => {
         if (disposed) return null;
         if (next.allow !== undefined) allow = next.allow;
-        const replacement = spawnPerPageChild(
-          uxMjs,
-          next.specJson,
-          allow,
-          profile,
-          `${opts.idTag}-r${++rev}`,
-          opts.readyTimeoutMs,
-        );
+        if (next.allowWrite !== undefined) allowWrite = next.allowWrite;
+        const replacement = spawnPerPageChild(uxMjs, next.specJson, childOpts(`${opts.idTag}-r${++rev}`));
         const newUrl = await replacement.whenReady();
         if (!newUrl || disposed) {
           replacement.dispose();
@@ -646,6 +608,9 @@ function poolPage(pool: UxPool, route: string, opts: ServeUxSpecOpts): UxPage {
     get url() {
       return url;
     },
+    get session() {
+      return null; // pooled pages share one process — no per-page session
+    },
     whenReady: () => ready,
     stderrTail: () => '', // pooled pages share one process — no per-page stderr tail
     update(next) {
@@ -685,7 +650,7 @@ function resolveBackend(uxMjs: string, profile: string): Promise<Backend> {
         ? Promise.resolve<Backend>({ kind: 'per-page' })
         : startPool(uxMjs, profile).then((pool): Backend => {
             if (pool) {
-              console.log('[ux-server] pooled ux server active — pages share one process.');
+              console.log('[ux-server] pooled ux server active — read-only pages share one process.');
               return { kind: 'pool', pool };
             }
             return { kind: 'per-page' };
@@ -716,6 +681,10 @@ export function disposeUxHost(): void {
  * lazily), so this hands back a facade immediately — callers keep their sync
  * call-shape and await whenReady() as before, and get a real page whether the
  * pool is up or the per-page fallback took over.
+ *
+ * A page needing the WRITE PATH (onCallback / confirm / allowWrite) always takes
+ * the per-page backend, whose `ux render --keep` child carries the callback
+ * stream and the env-injected confirm broker the pool `set` protocol can't.
  */
 export function serveUxSpec(opts: ServeUxSpecOpts): UxPage {
   const uxMjs = resolveUxMjs();
@@ -725,9 +694,11 @@ export function serveUxSpec(opts: ServeUxSpecOpts): UxPage {
   }
   const profile = opts.profile || process.env.OPENCLI_PROFILE || 'render';
   const route = `pg-${opts.idTag}`.replace(/[^a-zA-Z0-9_-]/g, '');
-  const inner: Promise<UxPage> = resolveBackend(uxMjs, profile).then((backend) =>
-    backend.kind === 'pool' ? poolPage(backend.pool, route, opts) : perPagePage(uxMjs, opts, profile),
-  );
+  const inner: Promise<UxPage> = needsPerPage(opts)
+    ? Promise.resolve(perPagePage(uxMjs, opts, profile))
+    : resolveBackend(uxMjs, profile).then((backend) =>
+        backend.kind === 'pool' ? poolPage(backend.pool, route, opts) : perPagePage(uxMjs, opts, profile),
+      );
 
   let page: UxPage | null = null;
   let disposed = false;
@@ -738,6 +709,9 @@ export function serveUxSpec(opts: ServeUxSpecOpts): UxPage {
   return {
     get url() {
       return page?.url ?? null;
+    },
+    get session() {
+      return page?.session ?? null;
     },
     whenReady: () => inner.then((p) => p.whenReady()),
     stderrTail: () => page?.stderrTail() ?? '',

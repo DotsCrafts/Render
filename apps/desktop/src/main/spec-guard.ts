@@ -1,66 +1,19 @@
 /**
-<<<<<<< HEAD
- * spec-guard — deliver-time validation of a generated page (render-page).
- *
- * Runs before Render serves an agent-authored json-render spec through the
- * opencli-ux kernel. The catalog whitelist inside the kernel is the injection
- * boundary; THIS guard fails fast on what the kernel would only surface as a
- * dead widget or a rejected call at click time:
- *   • the spec must be valid JSON (an object);
- *   • every bound action must be a page action (ux_data / ux_submit /
- *     ux_confirm / ux_cancel) — chat-panel-only actions are rejected;
- *   • every ux_data request must be covered by the page's grants
- *     (--allow ∪ --allow-write), so no button is born dead;
- *   • grants must be well-formed "<site> <command>" pairs.
- *
- * RELAXED for the generated-page WRITE path (genpage-write-path): ux_submit /
- * ux_confirm are legal on delivered pages — the kernel runs them non-terminal
- * in keep mode and streams the payload back, which the runtime forwards into
- * the conversation. Direct writes ride per-command --allow-write grants, each
- * invocation human-confirmed through the ux-confirm-broker. What used to be a
- * blanket deliver-time rejection is now a shape check.
- */
-
-/** Actions a generated PAGE may bind (panel-only actions like ux_instruct are not servable). */
-const PAGE_ACTIONS = new Set(['ux_data', 'ux_submit', 'ux_confirm', 'ux_cancel']);
-
-export interface SpecGuardResult {
-  ok: boolean;
-  errors: string[];
-}
-
-/** Parse a "<site> <command>,…" grant string; malformed entries become errors. */
-export function parseGrants(raw: string | undefined, label: string, errors: string[]): Set<string> {
-  const pairs = new Set<string>();
-  for (const entry of String(raw ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
-    if (/^\S+ \S+$/.test(entry)) pairs.add(entry);
-    else errors.push(`${label}: "${entry}" is not a "<site> <command>" pair`);
-  }
-  return pairs;
-}
-
-/**
- * Validate a render-page spec + its grants. Never throws; collects every
- * problem so the agent can fix the spec in one pass.
- */
-export function guardPageSpec(
-  specJson: string,
-  grants: { allow?: string; allowWrite?: string } = {},
-): SpecGuardResult {
-  const errors: string[] = [];
-=======
  * spec-guard — deliver-time validation for agent-authored json-render page specs.
  *
  * The agent writes a spec file and runs `render-page`; before Render serves it
  * we check what the served ux-app can NOT check for us:
  *   • structural integrity (root resolves, elements are {type,…}, children link)
  *     — hard errors: a broken tree renders a blank tab with no message anywhere.
- *   • terminal actions (ux_submit / ux_confirm / ux_cancel) — hard errors: in
- *     `--keep` page mode those actions destroy the page and drop the user's
- *     input (the kernel's done-screen), so a Tier-2 page must never bind them.
- *   • ux_data requests vs the `--allow` list — hard errors: the kernel would
- *     403 them at click time; failing at deliver time lets the AGENT fix the
- *     allowlist instead of the human discovering a dead widget.
+ *   • bound actions must be PAGE actions (ux_data / ux_submit / ux_confirm /
+ *     ux_cancel) — hard errors otherwise: a panel-only action like ux_instruct
+ *     is not servable on a page. NOTE (genpage-write-path): ux_submit / ux_confirm
+ *     are now ALLOWED — in `--keep` mode the kernel runs them non-terminal and
+ *     streams the payload back, which the runtime forwards into the conversation.
+ *   • ux_data requests vs the page's grants (--allow ∪ --allow-write) — hard
+ *     errors: the kernel would 403 them at click time; failing at deliver time
+ *     lets the AGENT fix the grants instead of the human discovering a dead
+ *     widget. Grant strings must be well-formed "<site> <command>" pairs.
  *   • unknown component types — soft warnings only: the page renderer degrades
  *     gracefully (drops the element), and the served catalog lives in the
  *     opencli-ux checkout, so a hardcoded list must not hard-reject drift.
@@ -98,8 +51,13 @@ const KNOWN_TYPES = new Set([
   'Map',
 ]);
 
-/** Actions that terminate a kept page (kernel done-screen) — never allowed. */
-const TERMINAL_ACTIONS = new Set(['ux_submit', 'ux_confirm', 'ux_cancel']);
+/**
+ * Actions a generated PAGE may bind. ux_submit / ux_confirm round-trip the page
+ * action back to the agent (kept pages, non-terminal); ux_data reads/writes
+ * through /ux/data; ux_cancel dismisses. A panel-only action (ux_instruct) or an
+ * unknown name is not servable on a page and is rejected.
+ */
+const PAGE_ACTIONS = new Set(['ux_data', 'ux_submit', 'ux_confirm', 'ux_cancel']);
 
 export interface SpecGuardResult {
   ok: boolean;
@@ -117,26 +75,27 @@ interface SpecElement {
 }
 
 /**
- * Parse the `--allow "site cmd,…"` list into "site cmd" pairs — trim-only,
- * EXACTLY mirroring the ux.mjs kernel's own parsing. Normalizing whitespace
- * here would make the guard accept an entry (e.g. double-spaced) that the
- * kernel will 403 at runtime — the fail-fast promise would silently lie.
+ * Parse a `"site cmd,…"` grant string into "site cmd" pairs — trim-only,
+ * EXACTLY mirroring the ux.mjs kernel's own parsing. Normalizing whitespace here
+ * would make the guard accept an entry (e.g. double-spaced) that the kernel will
+ * 403 at runtime — the fail-fast promise would silently lie. Malformed entries
+ * (not a "<site> <command>" pair) are pushed to `errors` so the agent fixes them.
  */
-function parseAllow(allow: string): Set<string> {
-  return new Set(
-    allow
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
+function parseGrants(raw: string, label: string, errors: string[]): Set<string> {
+  const pairs = new Set<string>();
+  for (const entry of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    if (/^\S+ \S+$/.test(entry)) pairs.add(entry);
+    else errors.push(`${label}: "${entry}" is not a "<site> <command>" pair`);
+  }
+  return pairs;
 }
 
 /**
  * Walk every action binding of an element — `on.<event>` AND `watch.<path>`,
  * each of which is a single ActionBinding or an ARRAY of them, and bindings can
- * nest further bindings (onSuccess/onError chains). A shallow single-object
- * walk here is a real hole: a terminal ux_submit hidden in an array or a watch
- * would sail past the guard and destroy the page at click time.
+ * nest further bindings (onSuccess/onError chains). A shallow single-object walk
+ * here is a real hole: an action hidden in an array or a watch would sail past
+ * the guard and fail at click time.
  */
 function bindings(el: SpecElement): Array<{ action: string; params?: Record<string, unknown> }> {
   const out: Array<{ action: string; params?: Record<string, unknown> }> = [];
@@ -173,36 +132,19 @@ function bindings(el: SpecElement): Array<{ action: string; params?: Record<stri
  * Validate an agent-authored page spec against the rules above. `specJson` must
  * already be known to parse (deliverPage JSON.parses first); a non-object or
  * shape mismatch still comes back as a hard error rather than a throw.
+ *
+ * `allow` / `allowWrite` are the page's grant strings ("site cmd,…"); a ux_data
+ * binding is valid when its "site command" is in EITHER (reads live in --allow,
+ * writes in --allow-write; each write is human-confirmed at run time).
  */
-export function validatePageSpec(specJson: string, allow: string): SpecGuardResult {
+export function validatePageSpec(specJson: string, allow: string, allowWrite = ''): SpecGuardResult {
   const errors: string[] = [];
   const warnings: string[] = [];
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
 
   let spec: unknown;
   try {
     spec = JSON.parse(specJson);
   } catch (err) {
-<<<<<<< HEAD
-    return { ok: false, errors: [`spec is not valid JSON — ${err instanceof Error ? err.message : String(err)}`] };
-  }
-  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
-    return { ok: false, errors: ['spec must be a JSON object'] };
-  }
-
-  const allow = parseGrants(grants.allow, '--allow', errors);
-  const allowWrite = parseGrants(grants.allowWrite, '--allow-write', errors);
-  const granted = new Set([...allow, ...allowWrite]);
-
-  // Simple shapes ({title,body,items} / lowered forms) carry no action bindings.
-  const s = spec as { root?: unknown; elements?: unknown };
-  if (s.elements !== undefined || s.root !== undefined) {
-    if (!s.elements || typeof s.elements !== 'object' || Array.isArray(s.elements)) {
-      errors.push('spec.elements must be an object of elements');
-    } else {
-      for (const [id, el] of Object.entries(s.elements as Record<string, unknown>)) {
-        checkElementActions(id, el, granted, errors);
-=======
     return { ok: false, errors: [`spec is not valid JSON: ${String(err)}`], warnings };
   }
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
@@ -222,7 +164,12 @@ export function validatePageSpec(specJson: string, allow: string): SpecGuardResu
     errors.push(`spec.root "${s.root}" does not exist in elements`);
   }
 
-  const allowed = parseAllow(allow);
+  // The page's grants: reads (--allow) ∪ writes (--allow-write). A malformed
+  // grant string is itself a hard error (mirrors the kernel's parsing exactly).
+  const readGrants = parseGrants(allow, '--allow', errors);
+  const writeGrants = parseGrants(allowWrite, '--allow-write', errors);
+  const granted = new Set([...readGrants, ...writeGrants]);
+
   for (const [id, el] of Object.entries(elements)) {
     if (!el || typeof el !== 'object') {
       errors.push(`element "${id}" is not an object`);
@@ -245,10 +192,11 @@ export function validatePageSpec(specJson: string, allow: string): SpecGuardResu
       }
     }
     for (const b of bindings(el)) {
-      if (TERMINAL_ACTIONS.has(b.action)) {
+      if (!PAGE_ACTIONS.has(b.action)) {
         errors.push(
-          `element "${id}" binds "${b.action}" — forbidden on a render-page (it destroys the page); bind ux_data instead`,
+          `element "${id}" binds "${b.action}" — not a page action (allowed: ${[...PAGE_ACTIONS].join(', ')})`,
         );
+        continue;
       }
       if (b.action === 'ux_data') {
         const req = b.params?.request as { site?: unknown; command?: unknown } | undefined;
@@ -256,59 +204,14 @@ export function validatePageSpec(specJson: string, allow: string): SpecGuardResu
         const command = typeof req?.command === 'string' ? req.command : '';
         if (!site || !command) {
           errors.push(`element "${id}" binds ux_data without request.site/request.command`);
-        } else if (!allowed.has(`${site} ${command}`)) {
+        } else if (!granted.has(`${site} ${command}`)) {
           errors.push(
-            `element "${id}" requests "${site} ${command}" which is not in --allow "${allow}" — add it to --allow or fix the request`,
+            `element "${id}" requests "${site} ${command}" which is granted by neither --allow "${allow}" nor --allow-write "${allowWrite}" — add it to --allow (reads) or --allow-write (writes)`,
           );
         }
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
       }
     }
   }
 
-<<<<<<< HEAD
-  return { ok: errors.length === 0, errors };
-}
-
-function checkElementActions(id: string, el: unknown, granted: Set<string>, errors: string[]): void {
-  if (!el || typeof el !== 'object') return;
-  const on = (el as { on?: unknown }).on;
-  if (!on || typeof on !== 'object' || Array.isArray(on)) return;
-  for (const [event, bound] of Object.entries(on as Record<string, unknown>)) {
-    for (const action of Array.isArray(bound) ? bound : [bound]) {
-      checkAction(`${id}.on.${event}`, action, granted, errors);
-    }
-  }
-}
-
-function checkAction(where: string, action: unknown, granted: Set<string>, errors: string[]): void {
-  if (!action || typeof action !== 'object') {
-    errors.push(`${where}: action binding must be an object`);
-    return;
-  }
-  const a = action as { action?: unknown; params?: unknown };
-  const name = typeof a.action === 'string' ? a.action : '';
-  if (!PAGE_ACTIONS.has(name)) {
-    errors.push(`${where}: "${name || String(a.action)}" is not a page action (allowed: ${[...PAGE_ACTIONS].join(', ')})`);
-    return;
-  }
-  if (name !== 'ux_data') return;
-
-  // a ux_data binding must reference a granted "<site> <command>" — otherwise
-  // the widget is born dead (the kernel would 403 it at fetch time).
-  const params = a.params && typeof a.params === 'object' ? (a.params as { request?: unknown }) : undefined;
-  const request = params?.request && typeof params.request === 'object' ? (params.request as { site?: unknown; command?: unknown }) : undefined;
-  const site = typeof request?.site === 'string' ? request.site : '';
-  const command = typeof request?.command === 'string' ? request.command : '';
-  if (!site || !command) {
-    errors.push(`${where}: ux_data needs params.request.site + .command`);
-    return;
-  }
-  const pair = `${site} ${command}`;
-  if (!granted.has(pair)) {
-    errors.push(`${where}: ux_data runs "${pair}" but it is not granted — add it to --allow (reads) or --allow-write (writes)`);
-  }
-=======
   return { ok: errors.length === 0, errors, warnings };
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
 }

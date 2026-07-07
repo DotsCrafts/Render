@@ -16,7 +16,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { guardPageSpec } from '../../src/main/spec-guard.js';
+import { validatePageSpec } from '../../src/main/spec-guard.js';
 import { parseRenderPage, RENDER_PAGE_SENTINEL } from '../../src/main/agent-instructions.js';
 import { pageActionToPrompt } from '../../src/main/agent-runtime.js';
 import { serveUxSpec, resolveUxMjs } from '../../src/main/ux-server.js';
@@ -30,19 +30,19 @@ test('spec-guard: page actions (incl. ux_submit/ux_confirm) pass; foreign action
   const spec = JSON.stringify({
     root: 'root',
     elements: {
-      root: el('Stack'),
+      root: { type: 'Stack', props: {}, children: ['submit', 'choose', 'close'] },
       submit: el('Button', { press: { action: 'ux_submit' } }),
       choose: el('Button', { press: { action: 'ux_confirm', params: { choice: 'ok' } } }),
       close: el('Button', { press: { action: 'ux_cancel' } }),
     },
   });
-  assert.deepEqual(guardPageSpec(spec, {}), { ok: true, errors: [] });
+  assert.equal(validatePageSpec(spec, '').ok, true);
 
   const bad = JSON.stringify({
     root: 'root',
     elements: { root: el('Button', { press: { action: 'ux_instruct' } }) },
   });
-  const r = guardPageSpec(bad, {});
+  const r = validatePageSpec(bad, '');
   assert.equal(r.ok, false);
   assert.match(r.errors[0], /ux_instruct.*not a page action/);
 });
@@ -51,25 +51,30 @@ test('spec-guard: ux_data must be covered by --allow ∪ --allow-write', () => {
   const spec = JSON.stringify({
     root: 'root',
     elements: {
+      root: { type: 'Stack', props: {}, children: ['read', 'write'] },
       read: el('FeedList', { mount: { action: 'ux_data', params: { key: 'r', request: { site: 'arxiv', command: 'recent' } } } }),
       write: el('Button', { press: { action: 'ux_data', params: { key: 'w', request: { site: 'dianping', command: 'reply' } } } }),
     },
   });
-  assert.equal(guardPageSpec(spec, { allow: 'arxiv recent', allowWrite: 'dianping reply' }).ok, true);
+  assert.equal(validatePageSpec(spec, 'arxiv recent', 'dianping reply').ok, true);
 
-  const missing = guardPageSpec(spec, { allow: 'arxiv recent' });
+  const missing = validatePageSpec(spec, 'arxiv recent');
   assert.equal(missing.ok, false);
-  assert.match(missing.errors[0], /"dianping reply" but it is not granted/);
+  assert.ok(missing.errors.some((e) => /dianping reply/.test(e)));
 });
 
 test('spec-guard: malformed input fails closed', () => {
-  assert.equal(guardPageSpec('not json', {}).ok, false);
-  assert.equal(guardPageSpec('[1,2]', {}).ok, false);
-  const badGrant = guardPageSpec(JSON.stringify({ title: 'simple' }), { allowWrite: 'justasite' });
+  assert.equal(validatePageSpec('not json', '').ok, false);
+  assert.equal(validatePageSpec('[1,2]', '').ok, false);
+  // a full spec is required — a simple {title} shape has no root/elements
+  assert.equal(validatePageSpec(JSON.stringify({ title: 'simple' }), '').ok, false);
+  // a malformed --allow-write grant is itself a hard error
+  const okSpec = JSON.stringify({ root: 'r', elements: { r: { type: 'Text', props: {} } } });
+  const badGrant = validatePageSpec(okSpec, '', 'justasite');
   assert.equal(badGrant.ok, false);
-  assert.match(badGrant.errors[0], /--allow-write.*not a "<site> <command>" pair/);
-  // simple shapes (no elements) with clean grants pass
-  assert.equal(guardPageSpec(JSON.stringify({ title: 'simple' }), { allow: 'arxiv recent' }).ok, true);
+  assert.match(badGrant.errors.join(' '), /--allow-write.*not a "<site> <command>" pair/);
+  // a well-formed full spec with a clean read grant passes
+  assert.equal(validatePageSpec(okSpec, 'arxiv recent').ok, true);
 });
 
 // ── render-page sentinel ─────────────────────────────────────────────────────

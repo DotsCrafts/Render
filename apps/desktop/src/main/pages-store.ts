@@ -37,18 +37,14 @@ export interface PagesStore {
   list(): SavedPageMeta[];
   /** The newest version record for a page, or null. */
   get(id: string): SavedPageRecord | null;
-<<<<<<< HEAD
-  /** Re-serve a page's newest spec via the ux-server and return the UxPage. */
-  reopen(id: string): Promise<UxPage | null>;
-=======
   /**
    * Re-serve a page's newest spec via the ux-server and return the UxPage. The
    * store retains NO server handles — the CALLER owns disposal (the IPC broker
    * registers reopened pages, deduped per id, and reaps them on tab close /
-   * window close).
+   * window close). Async: it re-serves through the runtime's `serve` hook (write
+   * broker + callback forwarding), which awaits the confirm-broker endpoint.
    */
-  reopen(id: string): UxPage | null;
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
+  reopen(id: string): Promise<UxPage | null>;
 }
 
 interface StoreOpts {

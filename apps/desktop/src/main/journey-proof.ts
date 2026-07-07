@@ -9,24 +9,20 @@
  *                   approval, a human "allow" round-trips back via resolveUx,
  *                   AND the approved command demonstrably EXECUTED (a completed
  *                   commandExecution with exit 0) — both are load-bearing in
- *                   result.ok, so an approval-protocol drift (the B1 precedent)
+ *                   passed.B, so an approval-protocol drift (the B1 precedent)
  *                   fails the proof instead of passing vacuously.
  *   C. human hand — the CDP relay endpoint (OPENCLI_CDP_ENDPOINT) is live and a
  *                   cookie adapter resolves to a ux login (needs a logged-in tab).
-<<<<<<< HEAD
- *   D. page write — a generated page served via runtime.servePage (opencli-ux
- *                   kernel, --keep): /ux/config carries keep:true; a write-granted
+ *   D. page write path — a generated page served via runtime.servePage (opencli-ux
+ *                   kernel, --keep): it answers 200 and /ux/config carries
+ *                   keep:true; a read-allowlisted /ux/data call succeeds while a
+ *                   non-allowlisted one 403s; spec-guard ACCEPTS a ux_submit
+ *                   binding but REJECTS a non-page action; a write-granted
  *                   /ux/data call is brokered through the ux-confirm-broker (the
- *                   human's "允许" resolves it via resolveUx); a ux_submit callback
- *                   streams back as JSONL and is forwarded into the conversation
- *                   as the agent's next turn — the page→action→agent round-trip.
-=======
- *   D. generated page — a fixture json-render spec is served through the SAME
- *                   ux-server kernel render-page uses; the URL must answer 200,
- *                   /ux/data must run an allowlisted read and 403 a
- *                   non-allowlisted one, and spec-guard must reject a terminal
- *                   ux_submit binding.
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
+ *                   human's "允许" resolves it via resolveUx); and a ux_submit
+ *                   callback streams back as JSONL and is forwarded into the
+ *                   conversation as the agent's next turn — the page→action→agent
+ *                   round-trip.
  *
  * macOS GUI screenshot perms block window capture (QA hit this); this log + the
  * in-app cdp-selftest are the allowed evidence.
@@ -41,7 +37,6 @@ import { createOpencliRouter } from '@render/opencli-router';
 import { createHumanHand } from '@render/cdp-human-hand';
 import type { AgentEvent, UxMessage, UxLoginSpec } from '@render/protocol';
 import { createAgentRuntime, type AgentRuntime } from './agent-runtime.js';
-import { serveUxSpec } from './ux-server.js';
 import { validatePageSpec } from './spec-guard.js';
 
 const TIMEOUT_MS = Number(process.env.PROOF_TIMEOUT_MS ?? 180_000);
@@ -88,7 +83,9 @@ async function main(): Promise<number> {
     if (e.kind === 'ux') {
       uxSeen.push(e.message);
       printUx(e.message);
-      // Act as the human: approve the FIRST blocking confirm so the turn proceeds.
+      // Act as the human: approve the FIRST blocking confirm of each id so the
+      // turn proceeds. This covers BOTH the codex command-approval (step B) and
+      // the generated-page write-confirm broker (step D) — each is a distinct id.
       if (
         e.message.blocking &&
         e.message.kind === 'confirm' &&
@@ -142,11 +139,15 @@ async function main(): Promise<number> {
       hr();
     }
 
-<<<<<<< HEAD
     if (STEPS.has('B')) {
       // ── B. brain + HITL: real codex turn with a command-approval round-trip ─
       line('B. brain — codex turn that asks command approval (HITL round-trip):');
-      const turnDone = waitFor(log, (e) => e.kind === 'turn_completed');
+      // NOT the synthetic boot-N turn the runtime retires as soon as codex's real
+      // turn starts — the proof must observe the REAL turn's completion.
+      const turnDone = waitFor(
+        log,
+        (e) => e.kind === 'turn_completed' && !(typeof e.turnId === 'string' && e.turnId.startsWith('boot-')),
+      );
       await deadline(
         runtime.submit(
           'Run the shell command `date -u` to get the current UTC time, then tell me exactly what it printed. You must run it as a command.',
@@ -155,52 +156,27 @@ async function main(): Promise<number> {
       );
       const completion = await deadline(turnDone, 'codex turn_completed');
       process.stderr.write('\n');
+      // The round-trip is only real if (a) an approval was surfaced AND replied to
+      // and (b) the approved command demonstrably RAN — B1 taught us a mangled
+      // decision reply lets the turn "complete" while the command never executes.
       const confirmRoundTrip = resolvedUx.size > 0;
+      const approvedCommandRan = log.some(
+        (e) =>
+          e.kind === 'item' &&
+          e.phase === 'completed' &&
+          e.item.type === 'commandExecution' &&
+          /date(\s+-u)?/.test(String(e.item.command ?? '')) &&
+          e.item.exitCode === 0,
+      );
       result.codexTurnStatus = completion.kind === 'turn_completed' ? completion.status : 'unknown';
       result.confirmRoundTrip = confirmRoundTrip;
-      if (!confirmRoundTrip) {
-        line('   (note: codex completed without requesting approval this run)');
-      }
-      passed.B = result.codexTurnStatus === 'completed';
+      result.approvedCommandRan = approvedCommandRan;
+      result.codexVersion = await codexVersion();
+      if (!confirmRoundTrip) line('   ✗ codex completed WITHOUT requesting approval — HITL unproven');
+      if (!approvedCommandRan) line('   ✗ no completed `date` commandExecution with exit 0 observed');
+      passed.B = result.codexTurnStatus === 'completed' && confirmRoundTrip && approvedCommandRan;
       hr();
     }
-=======
-    // ── B. brain + HITL: real codex turn with a command-approval round-trip ───
-    line('B. brain — codex turn that asks command approval (HITL round-trip):');
-    // NOT the synthetic boot-N turn the runtime retires as soon as codex's real
-    // turn starts — the proof must observe the REAL turn's completion.
-    const turnDone = waitFor(
-      log,
-      (e) => e.kind === 'turn_completed' && !(typeof e.turnId === 'string' && e.turnId.startsWith('boot-')),
-    );
-    await deadline(
-      runtime.submit(
-        'Run the shell command `date -u` to get the current UTC time, then tell me exactly what it printed. You must run it as a command.',
-      ),
-      'codex submit',
-    );
-    const completion = await deadline(turnDone, 'codex turn_completed');
-    process.stderr.write('\n');
-    // The round-trip is only real if (a) an approval was surfaced AND replied to
-    // and (b) the approved command demonstrably RAN — B1 taught us a mangled
-    // decision reply lets the turn "complete" while the command never executes.
-    const confirmRoundTrip = resolvedUx.size > 0;
-    const approvedCommandRan = log.some(
-      (e) =>
-        e.kind === 'item' &&
-        e.phase === 'completed' &&
-        e.item.type === 'commandExecution' &&
-        /date(\s+-u)?/.test(String(e.item.command ?? '')) &&
-        e.item.exitCode === 0,
-    );
-    result.codexTurnStatus = completion.kind === 'turn_completed' ? completion.status : 'unknown';
-    result.confirmRoundTrip = confirmRoundTrip;
-    result.approvedCommandRan = approvedCommandRan;
-    result.codexVersion = await codexVersion();
-    if (!confirmRoundTrip) line('   ✗ codex completed WITHOUT requesting approval — HITL unproven');
-    if (!approvedCommandRan) line('   ✗ no completed `date` commandExecution with exit 0 observed');
-    hr();
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
 
     if (STEPS.has('C')) {
       // ── C. human hand: CDP relay live + cookie adapter → ux login ───────────
@@ -224,10 +200,33 @@ async function main(): Promise<number> {
     }
 
     if (STEPS.has('D')) {
-      // ── D. page write path: generated page → action → agent round-trip ──────
-      line('D. page write path — keep-mode page, brokered write, action round-trip:');
-      // A minimal page with one submit button — served through the runtime so it
-      // gets the spec-guard, the write-confirm broker, and callback forwarding.
+      // ── D. page write path: serve → gate reads → broker a write → round-trip ─
+      line('D. page write path — keep-mode page, /ux/data gate, brokered write, action round-trip:');
+
+      // spec-guard's write-path semantics: a ux_submit binding is now ACCEPTED
+      // (it round-trips to the agent); a non-page action (ux_instruct) is still
+      // REJECTED. Both are deliver-time, before any server is spawned.
+      const submitOk = validatePageSpec(
+        JSON.stringify({
+          root: 'root',
+          elements: { root: { type: 'Button', props: { label: 'go' }, on: { press: { action: 'ux_submit' } } } },
+        }),
+        '',
+      ).ok;
+      const badActionRejected = !validatePageSpec(
+        JSON.stringify({
+          root: 'root',
+          elements: { root: { type: 'Button', props: { label: 'x' }, on: { press: { action: 'ux_instruct' } } } },
+        }),
+        '',
+      ).ok;
+      result.specGuardAcceptsSubmit = submitOk;
+      result.specGuardRejectsNonPageAction = badActionRejected;
+      line(`   spec-guard: accepts ux_submit=${submitOk}, rejects ux_instruct=${badActionRejected}`);
+
+      // A page with a submit button, a READ grant (arxiv search) and a WRITE
+      // grant (arxiv recent) — served through the runtime so it gets the
+      // spec-guard, the write-confirm broker, and callback forwarding.
       const specJson = JSON.stringify({
         root: 'root',
         state: {},
@@ -239,37 +238,54 @@ async function main(): Promise<number> {
       const page = await runtime.servePage({
         specJson,
         title: 'proof-page',
-        allow: '',
-        allowWrite: 'arxiv search', // per-command write grant (harmless read used as the granted command)
+        allow: 'arxiv search',
+        allowWrite: 'arxiv recent', // write-granted (a real read used as the granted "write" command)
       });
       const pageUrl = await deadline(page.whenReady(), 'page url');
       if (!pageUrl) throw new Error('page never announced a url (is opencli-ux/ux.mjs present?)');
-      line(`   page served → ${pageUrl}`);
-      const cfg = (await (await fetch(new URL('/ux/config', pageUrl))).json()) as {
+      const pageServed = (await fetch(pageUrl)).status === 200;
+      result.pageServed = pageServed;
+      line(`   page served → ${pageUrl} (200=${pageServed})`);
+
+      const origin = new URL(pageUrl).origin;
+      const cfg = (await (await fetch(`${origin}/ux/config`)).json()) as {
         keep?: boolean;
         session: string;
         token: string;
+        allow?: string[];
         allowWrite?: string[];
       };
       if (cfg.keep !== true) throw new Error('/ux/config missing keep:true');
       result.pageConfigKeep = true;
-      line(`   /ux/config → keep:true, allowWrite:${JSON.stringify(cfg.allowWrite)}`);
+      line(`   /ux/config → keep:true, allow:${JSON.stringify(cfg.allow)}, allowWrite:${JSON.stringify(cfg.allowWrite)}`);
+
+      const post = (body: unknown): Promise<Response> =>
+        fetch(`${origin}/ux/data`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-ux-token': cfg.token, origin },
+          body: JSON.stringify(body),
+        });
+
+      // read gate: allowlisted read runs (200), non-allowlisted 403s.
+      const allowedRes = await post({ site: 'arxiv', command: 'search', positional: ['agents'], args: { limit: 1 } });
+      const rejectedRes = await post({ site: 'zhihu', command: 'hot' });
+      result.pageDataAllowed = allowedRes.status === 200;
+      result.pageDataRejected = rejectedRes.status === 403;
+      line(`   /ux/data read → allowed=${allowedRes.status} rejected=${rejectedRes.status}`);
 
       // write-granted /ux/data: the kernel asks Render's confirm broker; the
-      // blocking confirm card is auto-approved above (the "human" allows) and
-      // the command runs. Anything but a write_denied/not_allowlisted proves
-      // the brokered path.
-      const dataRes = (await (
-        await fetch(new URL('/ux/data', pageUrl), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-ux-token': cfg.token },
-          body: JSON.stringify({ site: 'arxiv', command: 'search', positional: [], args: { query: 'agents', limit: 1 } }),
-        })
-      ).json()) as { ok?: boolean; code?: string; error?: string };
-      const brokered = dataRes.code !== 'write_denied' && dataRes.code !== 'not_allowlisted';
+      // blocking confirm card is auto-approved by onEvent (the "human" allows)
+      // and the command runs. Anything but write_denied/not_allowlisted proves
+      // the brokered path was taken.
+      const writeRes = (await (await post({ site: 'arxiv', command: 'recent' })).json()) as {
+        ok?: boolean;
+        code?: string;
+        error?: string;
+      };
+      const brokered = writeRes.code !== 'write_denied' && writeRes.code !== 'not_allowlisted';
       result.pageWriteBrokered = brokered;
-      line(`   /ux/data (write-granted) → ok:${dataRes.ok} code:${dataRes.code ?? '-'}`);
-      if (!brokered) throw new Error(`write was not brokered: ${dataRes.error ?? dataRes.code}`);
+      line(`   /ux/data (write-granted) → ok:${writeRes.ok} code:${writeRes.code ?? '-'}`);
+      if (!brokered) throw new Error(`write was not brokered: ${writeRes.error ?? writeRes.code}`);
 
       // page action → agent: post the ux_submit callback like the page would;
       // the kernel streams it as JSONL, the runtime forwards it into the
@@ -281,10 +297,13 @@ async function main(): Promise<number> {
           (e as { item?: { type?: string; text?: unknown } }).item?.type === 'userMessage' &&
           String((e as { item?: { text?: unknown } }).item?.text ?? '').includes('[page action]'),
       );
-      const answered = waitFor(log, (e) => e.kind === 'turn_completed');
-      await fetch(new URL(`/ux/callback/${cfg.session}`, pageUrl), {
+      const answered = waitFor(
+        log,
+        (e) => e.kind === 'turn_completed' && !(typeof e.turnId === 'string' && e.turnId.startsWith('boot-')),
+      );
+      await fetch(`${origin}/ux/callback/${cfg.session}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-ux-token': cfg.token },
+        headers: { 'content-type': 'application/json', 'x-ux-token': cfg.token, origin },
         body: JSON.stringify({ submitted: true, action: 'ux_submit', values: { q: '42' } }),
       });
       await deadline(echoed, 'page action forwarded into the conversation');
@@ -294,34 +313,20 @@ async function main(): Promise<number> {
       result.pageActionTurnStatus = turn.kind === 'turn_completed' ? turn.status : 'unknown';
       result.pageActionRoundTrip = true;
       page.dispose();
-      passed.D = brokered && result.pageActionTurnStatus === 'completed';
+      passed.D =
+        submitOk &&
+        badActionRejected &&
+        pageServed &&
+        result.pageDataAllowed === true &&
+        result.pageDataRejected === true &&
+        brokered &&
+        result.pageActionTurnStatus === 'completed';
       hr();
     }
 
-    // ── D. generated page: the render-page kernel serves + gates a spec ───────
-    line('D. generated page — ux-server kernel + /ux/data allowlist gate:');
-    const pageChecks = await deadline(provePageKernel(), 'page kernel proof');
-    Object.assign(result, pageChecks);
-    line(`   served=${pageChecks.pageServed} data200=${pageChecks.pageDataAllowed} 403=${pageChecks.pageDataRejected} guard=${pageChecks.specGuardRejects}`);
-    hr();
-
     result.eventKinds = countBy(log.map((e) => e.kind));
-<<<<<<< HEAD
     result.passed = passed;
     result.ok = [...STEPS].every((s) => passed[s] === true);
-=======
-    result.ok =
-      papers.length > 0 &&
-      result.codexTurnStatus === 'completed' &&
-      confirmRoundTrip &&
-      approvedCommandRan &&
-      Boolean(endpoint) &&
-      Boolean(loginUx) &&
-      pageChecks.pageServed &&
-      pageChecks.pageDataAllowed &&
-      pageChecks.pageDataRejected &&
-      pageChecks.specGuardRejects;
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -332,13 +337,8 @@ async function main(): Promise<number> {
 
   line(
     result.ok
-<<<<<<< HEAD
       ? `✅ M6 PASS — steps ${[...STEPS].sort().join('')} (opencli ux render / codex HITL / CDP route / page write round-trip)`
       : '❌ M6 INCOMPLETE',
-=======
-      ? '✅ PASS — opencli ux render + codex HITL (approved command ran) + live CDP browser route + generated-page kernel'
-      : '❌ INCOMPLETE',
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
   );
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   return result.ok ? 0 : 1;
@@ -351,78 +351,6 @@ function codexVersion(): Promise<string> {
       resolve(err ? `unknown (${err.message.slice(0, 60)})` : stdout.trim());
     });
   });
-}
-
-/**
- * Step D: pipe a fixture spec through the SAME kernel render-page uses and
- * probe the served app's contract — 200 on GET /, an allowlisted /ux/data read
- * succeeds, a non-allowlisted one 403s, and spec-guard rejects a terminal
- * ux_submit binding at deliver time.
- */
-async function provePageKernel(): Promise<{
-  pageServed: boolean;
-  pageDataAllowed: boolean;
-  pageDataRejected: boolean;
-  specGuardRejects: boolean;
-}> {
-  const fixture = {
-    root: 'root',
-    state: { status: { papers: 'idle' }, error: {}, data: {} },
-    elements: {
-      root: { type: 'Stack', props: { direction: 'vertical', gap: 'md' }, children: ['h', 'feed'] },
-      h: { type: 'Heading', props: { text: 'proof fixture', level: 'h2' } },
-      feed: {
-        type: 'FeedList',
-        props: { title: 'papers', status: { $state: '/status/papers' }, data: { $state: '/data/papers' } },
-        on: {
-          mount: {
-            action: 'ux_data',
-            params: {
-              key: 'papers',
-              request: { site: 'arxiv', command: 'search', positional: ['agents'], args: { limit: 2 } },
-            },
-          },
-        },
-      },
-    },
-  };
-  const specJson = JSON.stringify(fixture);
-
-  // deliver-time guard: a terminal action must be rejected before serving
-  const badSpec = JSON.stringify({
-    root: 'b',
-    elements: { b: { type: 'Button', props: { label: 'x' }, on: { press: { action: 'ux_submit' } } } },
-  });
-  const specGuardRejects = !validatePageSpec(badSpec, 'arxiv search').ok;
-
-  const page = serveUxSpec({ specJson, allow: 'arxiv search', idTag: `proof-${Date.now()}` });
-  try {
-    const url = await page.whenReady();
-    if (!url) return { pageServed: false, pageDataAllowed: false, pageDataRejected: false, specGuardRejects };
-    const origin = new URL(url).origin;
-    const pageServed = (await fetch(url)).status === 200;
-    const cfg = (await fetch(`${origin}/ux/config`).then((r) => r.json())) as { token?: string };
-    const post = (body: unknown): Promise<Response> =>
-      fetch(`${origin}/ux/data`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-ux-token': cfg.token ?? '',
-          origin,
-        },
-        body: JSON.stringify(body),
-      });
-    const allowedRes = await post({ site: 'arxiv', command: 'search', positional: ['agents'], args: { limit: 2 } });
-    const rejectedRes = await post({ site: 'zhihu', command: 'hot' });
-    return {
-      pageServed,
-      pageDataAllowed: allowedRes.status === 200,
-      pageDataRejected: rejectedRes.status === 403,
-      specGuardRejects,
-    };
-  } finally {
-    page.dispose();
-  }
 }
 
 function printUx(m: UxMessage): void {

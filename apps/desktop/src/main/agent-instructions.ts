@@ -168,9 +168,21 @@ Steps:
        render-page app.json --title "本地生活门户" --allow "agg search,coingecko top,dianping search"
 
    \`--allow\` is the server-owned allowlist of \`<site> <command>\` pairs the page may
-<<<<<<< HEAD
    run through \`/ux/data\` (READ commands run directly; commands that CHANGE
    things need \`--allow-write\`, below).
+3. **Revise in place — \`render-page\` is updatable.** Re-running \`render-page\`
+   with the SAME spec file UPDATES the already-open page/tab (no new tab, no new
+   app): edit the file, run the same command again. A DIFFERENT file path mints a
+   NEW page — reuse the path when revising, pick a new file only for a genuinely
+   different app.
+
+**Deliver EARLY, then refine.** Don't hold the page until the end of your turn.
+For anything data-heavy, run \`render-page\` as soon as the spec's skeleton exists —
+live-data components fetch on mount and show their own loading states, so the
+human gets a working page while you keep working. Then refine it: edit the same
+spec file (add sections, wire more data, fix layout) and re-run \`render-page\`
+after each meaningful revision. Use the same mechanism when the human asks for a
+change to a page you delivered earlier in the conversation.
 
 ### Page ACTIONS — the page can talk back to you, and (with grants) write
 
@@ -197,22 +209,6 @@ A generated page is not read-only anymore. Two write paths:
    pauses and asks the human to confirm in Render before it runs; ungranted or
    unconfirmed writes are rejected. Grant ONLY the commands the page's buttons
    actually use — never grant broadly.
-=======
-   run through \`/ux/data\` (READ commands; writes are default-rejected).
-3. **Revise in place — \`render-page\` is updatable.** Re-running \`render-page\`
-   with the SAME spec file UPDATES the already-open page/tab (no new tab, no new
-   app): edit the file, run the same command again. A DIFFERENT file path mints a
-   NEW page — reuse the path when revising, pick a new file only for a genuinely
-   different app.
-
-**Deliver EARLY, then refine.** Don't hold the page until the end of your turn.
-For anything data-heavy, run \`render-page\` as soon as the spec's skeleton exists —
-live-data components fetch on mount and show their own loading states, so the
-human gets a working page while you keep working. Then refine it: edit the same
-spec file (add sections, wire more data, fix layout) and re-run \`render-page\`
-after each meaningful revision. Use the same mechanism when the human asks for a
-change to a page you delivered earlier in the conversation.
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
 
 **Live data** — a component fetches by binding an \`on.mount\` (or an event like
 \`search\`) to the \`ux_data\` action, and binding its props to \`/data/<key>\` and

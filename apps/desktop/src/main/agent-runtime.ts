@@ -37,7 +37,6 @@ import { parseOpencliCommand } from './opencli-command.js';
 import { opencliResultToUx } from './opencli-to-ux.js';
 import { uxConfirmAllows, uxResultToCodexReply } from './ux-reply.js';
 import { createUxConfirmBroker, type UxWriteRequest } from './ux-confirm-broker.js';
-import { guardPageSpec } from './spec-guard.js';
 import {
   RENDER_AGENTS_MD,
   writeAgentsMd,
@@ -166,7 +165,7 @@ export interface AgentRuntimeDeps {
    * store entry (Delta 5 addVersion), so Save captures the latest spec instead of
    * littering the store with one draft per revision. Best-effort.
    */
-  updatePage?: (id: string, input: { specJson: string; title?: string; allow?: string }) => void;
+  updatePage?: (id: string, input: { specJson: string; title?: string; allow?: string; allowWrite?: string }) => void;
 }
 
 interface PendingHitl {
@@ -187,6 +186,8 @@ interface DeliveredPage {
   file: string;
   title: string;
   allow: string;
+  /** per-command write grants — carried so a revision keeps its write capability */
+  allowWrite?: string;
   /** conversation generation at delivery — gates same-file revision matching */
   convGen: number;
   /** the tab the page lives in — the HUMAN-facing surface to update in place */
@@ -317,15 +318,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
   /**
    * Serve a page spec through the opencli-ux kernel with the full write-path
-   * wiring: deliver-time spec-guard, the write-confirm broker (only when write
-   * grants exist), and keep-mode callback forwarding back into the conversation.
+   * wiring: the write-confirm broker (only when write grants exist) and keep-mode
+   * callback forwarding back into the conversation. The spec is validated by the
+   * caller (deliverPage up-front; reopen re-serves a spec validated at delivery).
    */
   const servePage = async (input: ServePageInput): Promise<UxPage> => {
-    const guard = guardPageSpec(input.specJson, {
-      ...(input.allow !== undefined ? { allow: input.allow } : {}),
-      ...(input.allowWrite !== undefined ? { allowWrite: input.allowWrite } : {}),
-    });
-    if (!guard.ok) throw new Error(`spec rejected — ${guard.errors.join('; ')}`);
     const title = input.title?.trim() || 'App';
     // writes are brokered per invocation; a page without grants never binds the broker
     const confirm = input.allowWrite?.trim() ? await confirmBroker.endpoint() : null;
@@ -352,14 +349,6 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
    * real localhost app whose only backend reach is the ux server's token-gated
    * /ux/data (reads via --allow, human-confirmed writes via --allow-write).
    */
-<<<<<<< HEAD
-  const deliverPage = async (inv: {
-    file: string;
-    title?: string;
-    allow?: string;
-    allowWrite?: string;
-  }): Promise<void> => {
-=======
   /**
    * A render-page failure must reach BOTH sides: the human (error row in the
    * feed) and the AGENT — the shim exits 0 unconditionally, so without a steer
@@ -371,7 +360,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     deps.emit({ kind: 'error', message: `render-page: ${reason}` });
     pageFailStreak += 1;
     if (!session || pageFailStreak > 3) return;
-    const guidance = `render-page FAILED (the page was NOT delivered): ${reason}\nFix the spec file (or the --allow list) and run render-page again.`;
+    const guidance = `render-page FAILED (the page was NOT delivered): ${reason}\nFix the spec file (or the --allow / --allow-write list) and run render-page again.`;
     try {
       if (session.activeTurnId) await session.steer(guidance);
       else await session.submitTurn(guidance);
@@ -390,12 +379,13 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   const revisePage = async (
     key: string,
     rec: DeliveredPage,
-    inv: { file: string; title?: string; allow?: string },
+    inv: { file: string; title?: string; allow?: string; allowWrite?: string },
     specJson: string,
   ): Promise<boolean> => {
     const url = await rec.page.update({
       specJson,
       ...(inv.allow !== undefined ? { allow: inv.allow } : {}),
+      ...(inv.allowWrite !== undefined ? { allowWrite: inv.allowWrite } : {}),
     });
     if (!url) {
       // server died / revision unservable — retire the record so the fresh
@@ -407,6 +397,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pageFailStreak = 0;
     if (inv.title?.trim()) rec.title = inv.title.trim();
     if (inv.allow !== undefined) rec.allow = inv.allow;
+    if (inv.allowWrite !== undefined) rec.allowWrite = inv.allowWrite;
     // Land the revision in the page's own tab: unchanged URL → loadURL reloads it.
     // If the human closed that tab, open a fresh one and re-key the registry.
     const navigated = rec.tabId ? deps.navigateTab?.(rec.tabId, url) === true : false;
@@ -418,10 +409,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       pageByTab.set(tabId ?? key, rec);
     }
     try {
+      const persistInput = {
+        specJson,
+        title: rec.title,
+        allow: rec.allow,
+        ...(rec.allowWrite ? { allowWrite: rec.allowWrite } : {}),
+      };
       if (rec.storeId) {
-        deps.updatePage?.(rec.storeId, { specJson, title: rec.title, allow: rec.allow });
+        deps.updatePage?.(rec.storeId, persistInput);
       } else {
-        const pid = deps.persistPage?.({ specJson, title: rec.title, allow: rec.allow });
+        const pid = deps.persistPage?.(persistInput);
         if (pid) rec.storeId = pid;
       }
     } catch (err) {
@@ -451,15 +448,24 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
    * second page/tab for the same spec file instead of revising the first.
    */
   let deliverChain: Promise<void> = Promise.resolve();
-  const enqueueDeliverPage = (inv: { file: string; title?: string; allow?: string }): void => {
+  const enqueueDeliverPage = (inv: {
+    file: string;
+    title?: string;
+    allow?: string;
+    allowWrite?: string;
+  }): void => {
     deliverChain = deliverChain.then(
       () => deliverPage(inv),
       () => deliverPage(inv), // never let one failed delivery poison the chain
     );
   };
 
-  const deliverPage = async (inv: { file: string; title?: string; allow?: string }): Promise<void> => {
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
+  const deliverPage = async (inv: {
+    file: string;
+    title?: string;
+    allow?: string;
+    allowWrite?: string;
+  }): Promise<void> => {
     let specJson: string;
     try {
       const res = await deps.sandbox.exec('cat', [inv.file], { cwd: deps.sandbox.workdir() });
@@ -472,17 +478,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       await failPage(errText(err));
       return;
     }
-<<<<<<< HEAD
-=======
-    // Deliver-time validation: structural integrity, forbidden terminal actions
-    // (ux_submit would destroy a kept page), and ux_data-vs-allowlist mismatches
-    // all fail HERE, agent-actionably — not as a blank tab or a dead widget.
-    const guard = validatePageSpec(specJson, inv.allow ?? '');
+    // Deliver-time validation: structural integrity, non-page actions, and
+    // ux_data requests not covered by --allow/--allow-write all fail HERE,
+    // agent-actionably — not as a blank tab or a dead widget. Page actions
+    // (ux_submit/ux_confirm) are allowed: they round-trip to the agent.
+    const guard = validatePageSpec(specJson, inv.allow ?? '', inv.allowWrite ?? '');
     if (!guard.ok) {
       await failPage(`spec rejected —\n- ${guard.errors.join('\n- ')}`);
       return;
     }
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
+    for (const w of guard.warnings) deps.emit({ kind: 'error', message: `render-page (warning): ${w}` });
 
     // Same spec file as a page THIS conversation already delivered → revise it in
     // place (skeleton→refine, or a post-hoc change) instead of minting a new tab.
@@ -537,6 +542,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       file: inv.file,
       title,
       allow: inv.allow ?? '',
+      ...(inv.allowWrite ? { allowWrite: inv.allowWrite } : {}),
       convGen: conversationGen,
       ...(tabId ? { tabId } : {}),
       ...(pageRef ? { storeId: pageRef.id } : {}),
@@ -1097,24 +1103,21 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingLogin.clear();
     loginPrompted.clear();
     pendingBlock.clear();
-<<<<<<< HEAD
-    pendingWrite.forEach((resolve) => resolve(false));
-    pendingWrite.clear();
-    pages.forEach((p) => p.dispose());
-    confirmBroker.dispose();
-    if (session) await session.dispose();
-=======
     pendingBootTurns.clear();
     cancelledBootTurns.clear();
     offTabClose?.();
     pageByTab.clear();
+    // Unblock any kernel still holding a write /ux/data open — deny is the only
+    // safe answer once its confirm card's conversation is torn down.
+    pendingWrite.forEach((resolve) => resolve(false));
+    pendingWrite.clear();
     pages.forEach((p) => p.dispose());
+    confirmBroker.dispose();
     // null before disposing — the crash handler treats a still-current session's
     // exit as an unexpected death and would emit a spurious error card.
     const old = session;
     session = null;
     if (old) await old.dispose();
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
     if (codexHome) await codexHome.cleanup();
   };
 
@@ -1131,7 +1134,6 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 }
 
-<<<<<<< HEAD
 /**
  * Render a page action (a keep-mode /ux/callback payload) as the agent's next
  * input. Only ux_submit / ux_confirm round-trip — ux_cancel and unrecognized
@@ -1157,10 +1159,7 @@ export function pageActionToPrompt(title: string | undefined, payload: unknown):
   return null;
 }
 
-function loginOpenedUx(site: string, url: string, opened: boolean, id: string, ts: number): UxMessage {
-=======
 function loginOpenedUx(site: string, url: string | undefined, id: string, ts: number): UxMessage {
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
   return {
     id,
     kind: 'render',

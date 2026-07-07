@@ -161,16 +161,10 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
         `Modify this interactive page ("${rec.title}"). Here is its current ` +
         `json-render spec:\n\n\`\`\`json\n${rec.specJson}\n\`\`\`\n\n` +
         `Change requested: ${instruction.trim() || 'improve it'}\n\n` +
-<<<<<<< HEAD
         `Write the updated spec and re-run \`render-page\` (allow: ${rec.allow || 'none'}` +
         `${rec.allowWrite ? `; allow-write: ${rec.allowWrite}` : ''}).`;
-      void agent.submit(prompt);
-    },
-=======
-        `Write the updated spec and re-run \`render-page\` (allow: ${rec.allow || 'none'}).`;
       return agent.submit(prompt);
     }),
->>>>>>> 0331304119c938cb49ca9d4ba93e575e9a428b5e
 
     // codex provider/auth — each mutation returns the fresh status so the
     // renderer re-renders. OAuth opens the auth URL in a Render tab (never the
