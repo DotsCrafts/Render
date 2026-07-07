@@ -81,7 +81,9 @@ export type TurnInputItem =
 
 export interface TurnSteerParams {
   threadId: string;
-  input: string;
+  input: TurnInputItem[];
+  /** the turn the steer targets — codex rejects a steer whose turn already ended */
+  expectedTurnId: string;
 }
 
 // Method name constants — single source of truth for callers.

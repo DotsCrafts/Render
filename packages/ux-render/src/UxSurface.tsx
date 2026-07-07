@@ -35,7 +35,12 @@ export function UxSurface({
   onAction,
 }: {
   message: UxMessage;
-  resolved?: UxResult;
+  /**
+   * The resolution to render inert. "replayed" marks a card whose resolution
+   * happened before a renderer reload — the id survived in the host's log but
+   * the UxResult didn't, so the card shows a neutral resolved note.
+   */
+  resolved?: UxResult | "replayed";
   onResolve: (result: UxResult) => void;
   /** Delta 2: a next-step action fired from a result card's quiet row. */
   onAction?: (action: ResultAction, message: UxMessage) => void;

@@ -1,3 +1,9 @@
+# Deterministic tier: install → build packages → typecheck → unit tests →
+# nav-guard e2e (real Electron under Xvfb). No opencli daemon and no
+# network-dependent journey proofs — those stay in the manual/nightly scripts
+# (packages/opencli-bridge harness proofs, `pnpm --filter @render/desktop proof`,
+# test:cdp), which need a macOS runner with a real opencli install.
+
 name: CI
 
 on:
@@ -40,8 +46,8 @@ jobs:
       - name: Typecheck (all projects)
         run: pnpm typecheck
 
-      - name: Unit tests — opencli-bridge
-        run: pnpm --filter @render/opencli-bridge test
+      - name: Unit tests (all packages + desktop)
+        run: pnpm test
 
       - name: E2E — nav guard (real Electron under Xvfb)
         working-directory: apps/desktop

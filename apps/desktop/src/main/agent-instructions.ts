@@ -6,7 +6,10 @@
  * opencli for anything web/app/current.
  */
 
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { SandboxProvider } from '@render/protocol';
+import { resolveUxMjs } from './ux-server.js';
 
 export const RENDER_AGENTS_MD = `# Render Agent — Operating Instructions
 
@@ -169,10 +172,10 @@ Steps:
 3. **Revise in place — \`render-page\` is updatable.** Re-running \`render-page\`
    with the SAME spec file UPDATES the already-open page/tab (no new tab, no new
    app): edit the file, run the same command again. A DIFFERENT file path mints a
-   NEW page — reuse the path when revising; pick a new file only for a genuinely
+   NEW page — reuse the path when revising, pick a new file only for a genuinely
    different app.
 
-**Deliver EARLY, then refine.** Do not hold the page until the end of your turn.
+**Deliver EARLY, then refine.** Don't hold the page until the end of your turn.
 For anything data-heavy, run \`render-page\` as soon as the spec's skeleton exists —
 live-data components fetch on mount and show their own loading states, so the
 human gets a working page while you keep working. Then refine it: edit the same
@@ -196,14 +199,38 @@ change to a page you delivered earlier in the conversation.
 \`positional\` is the command's leading positional args (a search keyword, an id);
 \`args\` are \`--flag value\` options.
 
-**Read the CANONICAL example first:** \`~/workspace/opencli-ux/examples/portal-jsonrender-live.json\`
-— it shows the full shape (state defaults, SearchPanel/MetricGrid/FeedList/WeatherPanel
-all wired with on.mount→ux_data). Copy its structure.
+**INTERACTIVE controls — exact event names matter (unknown events silently no-op):**
+- \`SearchPanel\` fires \`on.search\`. Bind the input to state and pass \`queryPath\`
+  — the handler reads the state at that pointer and injects it into the
+  request's \`positional\`:
+
+       "search": {
+         "type": "SearchPanel",
+         "props": { "title": "搜索", "value": {"$state":"/query"},
+                    "status": {"$state":"/status/hits"}, "data": {"$state":"/data/hits"} },
+         "on": { "search": { "action": "ux_data", "params": { "key": "hits",
+                 "queryPath": "/query",
+                 "request": { "site":"agg", "command":"search", "positional":[], "args":{"limit":10} } } } }
+       }
+
+- \`Button\` fires \`on.press\` (NOT click). A refresh button binds \`ux_data\` with
+  the same key as the widget it refreshes.
+- **Controls on a render-page may ONLY bind \`ux_data\`.** NEVER bind
+  \`ux_submit\` / \`ux_confirm\` / \`ux_cancel\` on a render-page — those END the
+  page (replaced by a done-screen; the user's input is lost). Render REJECTS
+  specs that bind them. Site WRITES are not possible from a page today: for a
+  write action, answer normally and let the human ask you to perform it.
+
+**A full CANONICAL example is seeded at \`./portal-example.json\` in your workdir**
+— state defaults, MetricGrid/FeedList/WeatherPanel on.mount→ux_data wiring, a
+SearchPanel with on.search + queryPath, and Button on.press refreshes. Read it
+before authoring your first page.
 
 The page opens in its OWN tab, served at a local URL by the opencli-ux kernel.
 After your FINAL \`render-page\` of the turn, end the turn (optionally a one-line
 \`render\` block telling the user the app is open) — do NOT also dump the data as
-a card.
+a card. If render-page FAILS, Render tells you why in a follow-up message — fix
+the spec or the \`--allow\` list and run it again.
 
 ## When you need a decision from the human — a \`block\` card
 
@@ -384,6 +411,36 @@ export function parseRenderOpen(command: string | undefined): string | null {
   const url = m[1].trim().replace(/^["']+|["']+$/g, '').trim();
   if (!url || url === 'render-open' || /\s/.test(url)) return null;
   return /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+}
+
+/**
+ * Seed the canonical json-render page example into the sandbox workdir as
+ * `portal-example.json` (AGENTS.md references it by that relative path). The
+ * source lives next to the opencli-ux kernel — resolving from resolveUxMjs()
+ * keeps it machine-independent, and copying INTO the sandbox is what makes the
+ * path readable on e2b too (a host-absolute ~/workspace path is not).
+ * Best-effort: without it the agent still has the inline few-shot above.
+ */
+export async function seedPortalExample(
+  sandbox: SandboxProvider,
+  env?: Record<string, string>,
+): Promise<boolean> {
+  const uxMjs = resolveUxMjs();
+  if (!uxMjs) return false;
+  let content: string;
+  try {
+    content = await readFile(join(dirname(uxMjs), 'examples', 'portal-jsonrender-live.json'), 'utf8');
+  } catch {
+    return false;
+  }
+  const workdir = sandbox.workdir();
+  const heredoc = `cat > "${workdir.replace(/"/g, '\\"')}/portal-example.json" <<'RENDER_EXAMPLE_EOF'\n${content}\nRENDER_EXAMPLE_EOF`;
+  try {
+    const res = await sandbox.exec('sh', ['-c', heredoc], { cwd: workdir, ...(env ? { env } : {}) });
+    return res.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -3,6 +3,12 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 interface Props {
   busy: boolean;
   onSubmit: (text: string) => void;
+  /**
+   * While a turn is running, Enter routes here instead of onSubmit — steering
+   * the live agent ("also sort by price") rather than starting a competing
+   * turn. The placeholder + a "steer ↵" hint make the mode switch visible.
+   */
+  onSteer?: (text: string) => void;
   onCancel: () => void;
   /**
    * Delta 2: a seed prefill pushed from a result card's Refine/Ask-follow-up
@@ -10,13 +16,26 @@ interface Props {
    * re-focus, so the user can edit and send.
    */
   seed?: { text: string; nonce: number };
+  /**
+   * ⌘K focus signal: bump the nonce to pull focus back to the input (e.g. the
+   * chrome-level Cmd/Ctrl+K listener). Unlike `seed` it PRESERVES any draft —
+   * the text is selected so the user can overtype or keep it.
+   */
+  focusNonce?: number;
 }
 
 /**
  * The always-visible primary control, pinned bottom-center. Focused on mount and
  * re-focused after each submit so the user can keep talking to the agent.
  */
-export function FloatingInput({ busy, onSubmit, onCancel, seed }: Props): ReactElement {
+export function FloatingInput({
+  busy,
+  onSubmit,
+  onSteer,
+  onCancel,
+  seed,
+  focusNonce,
+}: Props): ReactElement {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -39,12 +58,25 @@ export function FloatingInput({ busy, onSubmit, onCancel, seed }: Props): ReactE
     }
   }, [seed?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⌘K: focus without clobbering a draft — select it instead.
+  useEffect(() => {
+    if (!focusNonce) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [focusNonce]);
+
   const submit = (): void => {
     if (!text.trim()) return;
-    onSubmit(text);
+    // mid-run input steers the running agent; idle input starts a turn
+    if (busy && onSteer) onSteer(text);
+    else onSubmit(text);
     setText('');
     inputRef.current?.focus();
   };
+
+  const steering = busy && !!onSteer;
 
   return (
     <form
@@ -62,10 +94,11 @@ export function FloatingInput({ busy, onSubmit, onCancel, seed }: Props): ReactE
       <input
         ref={inputRef}
         value={text}
-        placeholder="Ask Render to do something…"
+        placeholder={steering ? 'Steer the running agent…' : 'Ask Render to do something…'}
         onChange={(e) => setText(e.target.value)}
       />
       {!busy && !text.trim() ? <span className="kbd">⌘ K</span> : null}
+      {steering && text.trim() ? <span className="kbd">steer ↵</span> : null}
       {busy ? (
         <button type="button" className="cancel" onClick={onCancel} aria-label="stop" title="Stop">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden>

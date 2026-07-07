@@ -3,9 +3,16 @@
 Status: **contract defined, Render side implemented** (`apps/desktop/src/main/ux-server.ts`).
 The serving side lives in the sibling `opencli-ux` checkout (`ux.mjs`) and still
 needs to implement the `pool` command described here. Until it does, Render's
-capability probe falls back to today's per-page `ux render --spec … --keep`
-servers automatically — nothing breaks, pool mode just lights up when `ux.mjs`
-gains it.
+capability probe falls back to the per-page `ux render --spec … --keep` servers
+(`watchUxChild`) automatically — nothing breaks, pool mode just lights up when
+`ux.mjs` gains it.
+
+Update-in-place works on BOTH backends: `UxPage.update()` hot-swaps the route's
+spec on the pool (stable URL → tab reload), and on the per-page fallback it
+spawns a replacement `ux render` server for the revised spec and retires the old
+one (new URL → the runtime re-points the tab). So the agent's skeleton→refine
+flow is live today regardless of pool support; pool mode only removes the
+per-revision process churn and the URL change.
 
 ## Why
 
