@@ -9,7 +9,14 @@
 export { createOpencliRouter } from './router.js';
 export type { OpencliRouterHandle } from './router.js';
 export { MetadataIndex, mapStrategy } from './metadata.js';
-export { extractJson, isAuthRequired, extractLoginUrl, AUTH_REQUIRED_EXIT } from './parse.js';
+export {
+  extractJson,
+  isAuthRequired,
+  isBrowserUnavailable,
+  extractLoginUrl,
+  AUTH_REQUIRED_EXIT,
+  BROWSER_CONNECT_EXIT,
+} from './parse.js';
 export { buildArgv } from './argv.js';
 export type {
   OpencliRouterDeps,

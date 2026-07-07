@@ -35,8 +35,12 @@ export function createHumanHand(deps: HumanHandDeps): HumanHandHandle {
     port,
     listTargets: () => deps.listTabs().map((t) => ({ tabId: t.tabId, url: t.url, title: t.title })),
     handleCommand: (cmd: RelayCommand) => {
-      const tabId = cmd.tabId ?? attached.keys().next().value;
-      if (!tabId) throw new Error('relay: no attached tab to target');
+      // The relay resolves per-connection tabIds before this runs; the
+      // fallbacks below cover direct callers. On a fresh boot NOTHING is
+      // attached yet — fall back to the first live tab (send() auto-attaches)
+      // instead of throwing on every first command.
+      const tabId = cmd.tabId ?? attached.keys().next().value ?? deps.listTabs()[0]?.tabId;
+      if (!tabId) throw new Error('relay: no tab available to target (no tabs open)');
       return send(tabId, cmd.method, cmd.params);
     },
   });

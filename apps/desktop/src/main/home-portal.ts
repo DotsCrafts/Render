@@ -11,12 +11,18 @@
  * The server is independent of the opencli daemon's health: the HTML renders even
  * if data widgets error, so the portal always loads. Best-effort: if ux.mjs or the
  * portal html is missing, the portal is disabled and tabs fall back to blank.
+ *
+ * Child readiness (stdout announce scan, stderr tail, hard deadline) is shared
+ * with the generated-page path — see `watchUxChild` in ux-server.ts. The ux.mjs
+ * resolver lives there too (single source of truth; once opencli-ux ships as an
+ * installed opencli plugin this becomes `opencli ux serve` and the lookup goes
+ * away).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, dirname, sep } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveUxMjs, watchUxChild } from './ux-server.js';
 
 /** Read commands the portal page is allowed to run through /ux/data (server-owned allowlist). */
 const PORTAL_ALLOW = 'agg search,coingecko top,arxiv recent,36kr news,wttr current';
@@ -31,18 +37,6 @@ export interface HomePortal {
 }
 
 const DISABLED: HomePortal = { url: null, whenReady: () => Promise.resolve(null), dispose() {} };
-
-/**
- * Resolve ux.mjs: env override → the sibling opencli-ux checkout. (opencli-ux is
- * not a Render dependency; once it ships as an installed opencli plugin this
- * becomes `opencli ux serve` and the path lookup goes away.)
- */
-function resolveUxMjs(): string | null {
-  const env = process.env.RENDER_PORTAL_UX_MJS?.trim();
-  if (env) return existsSync(env) ? env : null;
-  const guess = join(homedir(), 'workspace', 'opencli-ux', 'ux.mjs');
-  return existsSync(guess) ? guess : null;
-}
 
 function resolvePortalHtml(): string | null {
   const env = process.env.RENDER_PORTAL_HTML?.trim();
@@ -92,14 +86,8 @@ export function startHomePortal(opts: { profile?: string } = {}): HomePortal {
     return DISABLED;
   }
 
-  let url: string | null = null;
-  let resolveReady!: (u: string | null) => void;
-  const ready = new Promise<string | null>((r) => {
-    resolveReady = r;
-  });
-
   const profile = opts.profile || process.env.OPENCLI_PROFILE || 'render';
-  let child: ChildProcess | null = null;
+  let child: ChildProcess;
   try {
     child = spawn('node', portalArgv, {
       env: { ...process.env, OPENCLI_PROFILE: profile },
@@ -110,53 +98,7 @@ export function startHomePortal(opts: { profile?: string } = {}): HomePortal {
     return DISABLED;
   }
 
-  // spawn-time ENOENT (e.g. `node` not on PATH when launched from Finder)
-  // surfaces as an async 'error' event — without a handler it would CRASH the
-  // main process, and 'exit' never fires so whenReady() would hang too.
-  child.on('error', (err) => {
-    console.warn('[home-portal] failed to spawn ux serve:', String(err));
-    resolveReady(null);
-  });
-
-  // ux serve announces `{"served":true,"url":"http://127.0.0.1:<port>/...",...}` on its first stdout line.
-  let buf = '';
-  child.stdout?.on('data', (d: Buffer) => {
-    if (url) return;
-    buf += d.toString();
-    const nl = buf.indexOf('\n');
-    if (nl < 0) return;
-    try {
-      const j = JSON.parse(buf.slice(0, nl));
-      if (j && typeof j.url === 'string') {
-        url = j.url;
-        resolveReady(url);
-      }
-    } catch {
-      /* keep buffering until a full JSON line arrives */
-    }
-  });
-  child.stderr?.on('data', (d: Buffer) => {
-    const s = d.toString().trim();
-    if (s) console.warn('[home-portal:ux]', s.slice(0, 200));
-  });
-  child.on('exit', (code) => {
-    if (!url) {
-      console.warn(`[home-portal] ux serve exited (code ${code}) before announcing a url — portal disabled.`);
-      resolveReady(null);
-    }
-  });
-
-  return {
-    get url() {
-      return url;
-    },
-    whenReady: () => ready,
-    dispose() {
-      try {
-        child?.kill();
-      } catch {
-        /* already gone */
-      }
-    },
-  };
+  // ux announces `{"url":"http://127.0.0.1:<port>/…",…}` as a JSON stdout line;
+  // the shared watcher scans every line, bounds the wait, and keeps stderr.
+  return watchUxChild(child, { label: 'home-portal' });
 }

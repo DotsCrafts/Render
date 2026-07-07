@@ -26,6 +26,14 @@ export interface OpencliRouterDeps {
    * `needsLogin` instead of running.
    */
   humanHand?: CdpEndpointSource;
+  /**
+   * Preferred CDP endpoint for the browser route (e.g. Render's own
+   * `--remote-debugging-port` when RENDER_NO_CDP is off — a full CDP surface,
+   * unlike the human-hand relay). When provided it wins for both the
+   * OPENCLI_CDP_ENDPOINT the router injects and its `browserEndpoint()`
+   * accessor; the router falls back to `humanHand` if it is absent or throws.
+   */
+  browserEndpoint?: () => Promise<string>;
   /** opencli executable name/path (default "opencli"). */
   opencliBin?: string;
   /**

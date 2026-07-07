@@ -16,12 +16,14 @@ import { Home } from './components/Home.js';
  * React tree only draws the surrounding chrome and talks to main over IPC.
  */
 export function App(): ReactElement {
-  const { tabs, activeTab, events, busy, actions } = useRenderState();
+  const { tabs, activeTab, events, busy, resolvedUxIds, actions } = useRenderState();
   const [showSettings, setShowSettings] = useState(false);
   const [showGallery, setShowGallery] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   // Delta 2: a seeded prefill for the floating input (Refine / Ask follow-up).
   const [seed, setSeed] = useState<{ text: string; nonce: number }>({ text: '', nonce: 0 });
+  // ⌘K focus signal for the floating input (draft-preserving, unlike seed).
+  const [focusNonce, setFocusNonce] = useState(0);
   // Delta 3: pages saved this session — marks their card's Save button done.
   const [savedPageIds, setSavedPageIds] = useState<Set<string>>(() => new Set());
 
@@ -30,6 +32,21 @@ export function App(): ReactElement {
   useEffect(() => {
     void window.render.setOverlay(showSettings || showGallery);
   }, [showSettings, showGallery]);
+
+  // ⌘K / Ctrl+K — the advertised keyboard path back to the intent input. This
+  // listener covers keystrokes while the chrome renderer has focus; when a
+  // native page view holds focus the main process must hand focus back first
+  // (app-menu accelerator), after which this input is focused on mount/nonce.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setFocusNonce((n) => n + 1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Delta 2: route a result card's next-step action. Refine/Ask-follow-up seed the
   // floating input; Save persists the page; Open-as-page asks the agent to build
@@ -139,6 +156,7 @@ export function App(): ReactElement {
         onResolve={actions.resolveUx}
         onResultAction={onResultAction}
         savedPageIds={savedPageIds}
+        initialResolvedIds={resolvedUxIds}
         busy={busy}
       />
 
@@ -146,8 +164,10 @@ export function App(): ReactElement {
         <FloatingInput
           busy={busy}
           onSubmit={actions.submit}
+          onSteer={actions.steer}
           onCancel={actions.cancel}
           seed={seed}
+          focusNonce={focusNonce}
         />
       </div>
     </div>

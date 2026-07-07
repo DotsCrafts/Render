@@ -43,9 +43,11 @@ import {
   parseRenderOpen,
   installRenderPage,
   parseRenderPage,
+  seedPortalExample,
 } from './agent-instructions.js';
 import { answerToUxMessage } from './answer-to-ux.js';
 import { detectOpencliAuthNeed } from './opencli-auth.js';
+import { validatePageSpec } from './spec-guard.js';
 import { createConversationGroups, type ConversationGroups } from './conversation-groups.js';
 import { serveUxSpec, type UxPage } from './ux-server.js';
 
@@ -75,8 +77,14 @@ export interface AgentRuntimeDeps {
   sandbox: SandboxProvider;
   /** the app hand — routes /opencli commands (public→sandbox, browser→CDP relay) */
   router: OpencliRouterHandle;
-  /** open a URL in Render's OWN browser tab (human-hand) — the `render-open` tool */
-  openTab?: (url: string) => void;
+  /**
+   * open a URL in Render's OWN browser tab (human-hand) — the `render-open`
+   * tool. Returns the tabId when the host provides one, which lets the runtime
+   * tie a generated page's server to its tab lifetime.
+   */
+  openTab?: (url: string) => string | void;
+  /** subscribe to tab teardown — pairs with openTab for page-server disposal */
+  onTabClose?: (cb: (tabId: string) => void) => () => void;
   /**
    * Register a conversation's tab group (label/color) with the TabManager when it
    * becomes active, so snapshots can render its chip even before the bridge mints
@@ -142,6 +150,29 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   let startPromise: Promise<void> | null = null;
   let turnSeq = 0;
   let uxSeq = 0;
+  // Conversation generation — bumped by newConversation so a submit that was
+  // mid-boot when the user reset can detect it and re-enter on the fresh thread
+  // instead of dereferencing a torn-down session.
+  let conversationGen = 0;
+  // Boot turns Stop already reported as cancelled — each in-flight
+  // startCodexTurn checks (and consumes) ITS OWN id after the boot settles, so
+  // a Stop aimed at message 1 can't be erased by message 2 minting a new turn.
+  const cancelledBootTurns = new Set<string>();
+  // /opencli router turns: live ones (id → command text) are cancellable — we
+  // stop reporting them; a cancelled id makes the late-settling invoke drop its
+  // stale result instead of corrupting a later turn.
+  const liveOcTurns = new Map<string, string>();
+  const cancelledOcTurns = new Set<string>();
+  // Synthetic "booting" turns emitted by startCodexTurn so the panel shows
+  // working state immediately. A SET, not a slot: a second message typed during
+  // the multi-second boot mints another boot turn, and every outstanding one
+  // must be retired when codex's real turn_started arrives — an orphaned boot
+  // id would leave the renderer's open-turn set (and its working dot) stuck
+  // for the rest of the session.
+  const pendingBootTurns = new Set<string>();
+  // consecutive render-page failures — stop auto-steering the agent after a few
+  // so a hopeless spec can't ping-pong forever.
+  let pageFailStreak = 0;
   // Per-conversation tab groups: conv-1 is the degenerate single-group case.
   // Each time a group becomes active we register it with the TabManager so its
   // label/color are known to snapshots before the bridge mints a tab into it.
@@ -151,6 +182,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
   let pageSeq = 0;
   const pages: UxPage[] = [];
+  // delivered page ↔ tab: closing the tab kills the page's server, so a day of
+  // browsing doesn't accumulate zombie node processes (each an opencli-capable
+  // localhost server). Pages without a known tab still die in dispose().
+  const pageByTab = new Map<string, UxPage>();
+  const offTabClose = deps.onTabClose?.((tabId) => {
+    const page = pageByTab.get(tabId);
+    if (!page) return;
+    pageByTab.delete(tabId);
+    page.dispose();
+  });
 
   /**
    * Read the json-render spec the agent wrote (inside the sandbox), serve it via
@@ -158,23 +199,45 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
    * drop a reference card. No isolated partition / artifact bridge: the page is a
    * real localhost app whose only backend reach is the ux server's /ux/data.
    */
+  /**
+   * A render-page failure must reach BOTH sides: the human (error row in the
+   * feed) and the AGENT — the shim exits 0 unconditionally, so without a steer
+   * the agent believes the page shipped and ends its turn. Steer the live turn
+   * when one is open, else start a corrective follow-up turn; give up after a
+   * few consecutive failures so a hopeless spec can't ping-pong forever.
+   */
+  const failPage = async (reason: string): Promise<void> => {
+    deps.emit({ kind: 'error', message: `render-page: ${reason}` });
+    pageFailStreak += 1;
+    if (!session || pageFailStreak > 3) return;
+    const guidance = `render-page FAILED (the page was NOT delivered): ${reason}\nFix the spec file (or the --allow list) and run render-page again.`;
+    try {
+      if (session.activeTurnId) await session.steer(guidance);
+      else await session.submitTurn(guidance);
+    } catch (err) {
+      console.warn('[agent-runtime] failPage steer failed:', errText(err));
+    }
+  };
+
   const deliverPage = async (inv: { file: string; title?: string; allow?: string }): Promise<void> => {
     let specJson: string;
     try {
       const res = await deps.sandbox.exec('cat', [inv.file], { cwd: deps.sandbox.workdir() });
       if (res.exitCode !== 0 || !res.stdout.trim()) {
-        deps.emit({ kind: 'error', message: `render-page: could not read ${inv.file}` });
+        await failPage(`could not read ${inv.file}`);
         return;
       }
       specJson = res.stdout;
     } catch (err) {
-      deps.emit({ kind: 'error', message: `render-page: ${errText(err)}` });
+      await failPage(errText(err));
       return;
     }
-    try {
-      JSON.parse(specJson);
-    } catch (err) {
-      deps.emit({ kind: 'error', message: `render-page: spec is not valid JSON — ${errText(err)}` });
+    // Deliver-time validation: structural integrity, forbidden terminal actions
+    // (ux_submit would destroy a kept page), and ux_data-vs-allowlist mismatches
+    // all fail HERE, agent-actionably — not as a blank tab or a dead widget.
+    const guard = validatePageSpec(specJson, inv.allow ?? '');
+    if (!guard.ok) {
+      await failPage(`spec rejected —\n- ${guard.errors.join('\n- ')}`);
       return;
     }
 
@@ -188,10 +251,15 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pages.push(page);
     const url = await page.whenReady();
     if (!url) {
-      deps.emit({ kind: 'error', message: `render-page: ux server failed to start for "${title}"` });
+      const tail = page.stderrTail().trim();
+      await failPage(
+        `ux server failed to start for "${title}"${tail ? ` — ${tail.slice(-300)}` : ''}`,
+      );
       return;
     }
-    deps.openTab?.(url);
+    pageFailStreak = 0;
+    const tabId = deps.openTab?.(url);
+    if (typeof tabId === 'string') pageByTab.set(tabId, page);
     // Delta 3: persist the spec so the human can Save + reopen it. The page is
     // pure given spec + allowlist, so re-serving reproduces it (data refetched
     // live). Best-effort — a persistence failure must not break the open.
@@ -239,9 +307,87 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       ...(env ? { env } : {}),
     });
     // accumulate streamed agentMessage text per item so the final answer can be
-    // converted into a structured ux render card (see answer-to-ux.ts).
+    // converted into a structured ux render card (see answer-to-ux.ts). While
+    // streaming, a throttled DRAFT card with the SAME stable id as the final
+    // card is emitted (the feed replaces same-id surfaces in place), so long
+    // answers fill in live instead of popping whole at the very end.
     const answerText = new Map<string, string>();
+    const draftEmittedAt = new Map<string, number>();
+    // reasoning arrives as one event per token fragment — batch fragments and
+    // forward at most ~2 events/sec (each event carries the text SINCE the last
+    // flush; the feed concatenates), so narration cannot flood the bounded
+    // event windows and evict real cards.
+    let reasonBuf: { itemId: string | undefined; text: string; lastFlush: number } = {
+      itemId: undefined,
+      text: '',
+      lastFlush: 0,
+    };
+    const flushReasoning = (): void => {
+      if (reasonBuf.text) {
+        deps.emit({
+          kind: 'reasoning',
+          ...(reasonBuf.itemId ? { itemId: reasonBuf.itemId } : {}),
+          text: reasonBuf.text,
+        });
+      }
+      reasonBuf = { itemId: reasonBuf.itemId, text: '', lastFlush: deps.now() };
+    };
+    const emitDraft = (itemId: string): void => {
+      const now = deps.now();
+      if (now - (draftEmittedAt.get(itemId) ?? 0) < 700) return;
+      const body = draftAnswerBody(answerText.get(itemId) ?? '');
+      if (!body) return;
+      draftEmittedAt.set(itemId, now);
+      deps.emit({
+        kind: 'ux',
+        message: {
+          id: `ux-ans-${itemId}`,
+          kind: 'render',
+          blocking: false,
+          ts: now,
+          spec: { body },
+        },
+      });
+    };
+
     s.onAgentEvent((event) => {
+      // codex process died. newConversation/dispose null `session` BEFORE
+      // tearing down, so if this session is still current the exit was NOT
+      // deliberate — surface it, close open turns, and reset so the next
+      // submit boots a fresh thread instead of wedging the panel forever.
+      if (event.kind === 'sandbox' && event.status === 'closed') {
+        deps.emit(event); // the lane's lifecycle row stays truthful either way
+        if (s !== session) return;
+        session = null;
+        startPromise = null;
+        pendingBootTurns.clear();
+        pendingHitl.clear();
+        pendingBlock.clear();
+        const home = codexHome;
+        codexHome = null;
+        deps.emit({
+          kind: 'error',
+          message: 'agent process exited — your next message starts a fresh session',
+        });
+        deps.emit({ kind: 'turn_completed', status: 'failed' });
+        void s.dispose().catch((err) => console.warn('[agent-runtime] crash dispose:', errText(err)));
+        if (home) void home.cleanup().catch(() => {});
+        return;
+      }
+
+      if (event.kind === 'reasoning') {
+        if (reasonBuf.itemId !== event.itemId && reasonBuf.text) flushReasoning();
+        reasonBuf = {
+          itemId: event.itemId,
+          text: reasonBuf.itemId === event.itemId ? reasonBuf.text + event.text : event.text,
+          lastFlush: reasonBuf.lastFlush,
+        };
+        if (deps.now() - reasonBuf.lastFlush >= 400) flushReasoning();
+        return;
+      }
+      // any non-delta event: flush buffered narration first so ordering holds
+      if (event.kind !== 'delta') flushReasoning();
+
       if (event.kind === 'ux' && event.message.blocking) {
         const requestId = event.message.origin?.requestId;
         if (requestId !== undefined) {
@@ -250,11 +396,12 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       }
 
       // The agent's prose answer must NOT show as raw feed text — it becomes a
-      // json-render card. Suppress agentMessage deltas; on completion, emit a
-      // ux render (parsed structured spec, or prose fallback as the card body).
+      // json-render card. agentMessage deltas accumulate into the draft card;
+      // on completion, the final card (same id) replaces it in place.
       if (event.kind === 'delta') {
         if (event.itemId) {
           answerText.set(event.itemId, (answerText.get(event.itemId) ?? '') + event.text);
+          emitDraft(event.itemId);
         }
         return;
       }
@@ -325,9 +472,14 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           const text =
             (typeof event.item.text === 'string' && event.item.text) ||
             (id ? (answerText.get(id) ?? '') : '');
-          if (id) answerText.delete(id);
+          if (id) {
+            answerText.delete(id);
+            draftEmittedAt.delete(id);
+          }
           if (text.trim()) {
-            const message = answerToUxMessage(text, `ux-ans-${++uxSeq}`, deps.now());
+            // same id as the streamed draft so the final card replaces it in place
+            const cardId = id ? `ux-ans-${id}` : `ux-ans-${++uxSeq}`;
+            const message = answerToUxMessage(text, cardId, deps.now());
             // a ```block answer is a decision card — track it so resolveUx steers
             // the conversation rather than routing the reply back to codex.
             if (message.kind === 'block') pendingBlock.add(message.id);
@@ -337,6 +489,19 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         return; // never forward the raw agentMessage item to the feed
       }
 
+      // codex's real turn is live — retire EVERY outstanding synthetic boot
+      // turn (each emitted by startCodexTurn so the panel showed working state
+      // during the boot). Real first, then the closes: the busy set never dips.
+      if (event.kind === 'turn_started' && pendingBootTurns.size > 0) {
+        const boots = [...pendingBootTurns];
+        pendingBootTurns.clear();
+        deps.emit(event);
+        for (const boot of boots) {
+          deps.emit({ kind: 'turn_completed', status: 'completed', turnId: boot });
+        }
+        return;
+      }
+
       deps.emit(event);
     });
     return s;
@@ -344,6 +509,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
   const ensureStarted = (): Promise<void> => {
     if (!startPromise) {
+      const genAtStart = conversationGen;
       startPromise = (async () => {
         // Render owns the approval UX, so run codex against a hook-free home —
         // approvals then arrive over the protocol as our ux confirm/form. Prefer a
@@ -352,22 +518,15 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         codexHome = (await deps.materializeCodexHome?.()) ?? (await prepareCodexHome());
         const env: Record<string, string> = {};
         if (codexHome) env.CODEX_HOME = codexHome.path;
-        // opencli's default profile (~/.opencli/browser-profiles.json) is often a
-        // DISCONNECTED context, which makes browser/search commands fail with
-        // "profile not connected". Pin a connected profile so the agent's opencli
-        // browser commands work without it having to recover each time.
-        //
-        // When the opencli /ext bridge is active (RENDER_OPENCLI_BRIDGE=1), Render
-        // is itself connected as a distinct, named profile (default `render`), so
-        // we target THAT — the agent's opencli browser/cookie commands are then
-        // served by Render's OWN Chromium via the bridge, while the unqualified
-        // default profile keeps routing to the user's system Chrome (untouched).
-        // An explicit OPENCLI_PROFILE always wins.
-        env.OPENCLI_PROFILE =
-          process.env.OPENCLI_PROFILE ??
-          (process.env.RENDER_OPENCLI_BRIDGE === '1'
-            ? (process.env.RENDER_OPENCLI_PROFILE?.trim() || 'render')
-            : 'default');
+        // Route the agent's opencli browser/cookie commands to Render's own
+        // bridge profile (injected by index.ts when the /ext bridge is up —
+        // undefined when the bridge is disabled). An explicit OPENCLI_PROFILE
+        // env always wins; with neither, we deliberately leave the variable
+        // UNSET so opencli falls through to its defaultContextId / single-
+        // connected-profile resolution instead of a literal (usually
+        // disconnected) "default" context.
+        const profile = process.env.OPENCLI_PROFILE ?? deps.opencliProfile;
+        if (profile) env.OPENCLI_PROFILE = profile;
         // Wire the human-hand relay so the agent's opencli browser-adapter calls
         // drive the user's REAL logged-in Chromium (Plane-2 stays in the browser).
         if (deps.cdpEndpoint) {
@@ -378,16 +537,30 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           }
         }
         // Start the sandbox ourselves, then seed AGENTS.md (makes opencli the
-        // agent's mandated hand) + install the `render-open` tool before boot.
+        // agent's mandated hand), the render-open/render-page shims, and the
+        // canonical page-spec example — the three seeds are independent files,
+        // so they install in parallel.
         await deps.sandbox.start({ env });
-        await writeAgentsMd(deps.sandbox, RENDER_AGENTS_MD, env);
-        // both the render-open and render-page shims live in the same .render-bin;
-        // install both (same dir) and prepend it to PATH once.
-        const binDir = await installRenderOpen(deps.sandbox, env);
-        await installRenderPage(deps.sandbox, env);
+        const [, binDir] = await Promise.all([
+          writeAgentsMd(deps.sandbox, RENDER_AGENTS_MD, env),
+          installRenderOpen(deps.sandbox, env),
+          installRenderPage(deps.sandbox, env),
+          seedPortalExample(deps.sandbox, env),
+        ]);
         if (binDir) env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
-        session = buildSession(env);
-        await session.start();
+        const built = buildSession(env);
+        session = built;
+        await built.start();
+        // the user reset the conversation while we were booting — this thread
+        // belongs to the OLD conversation; tear it down and let submit re-enter.
+        if (genAtStart !== conversationGen) {
+          if (session === built) session = null;
+          await built.dispose();
+          const home = codexHome;
+          codexHome = null;
+          if (home) await home.cleanup().catch(() => {});
+          throw new Error('conversation was reset during boot');
+        }
       })().catch((err) => {
         startPromise = null; // allow a retry after a failed boot
         throw err;
@@ -398,21 +571,86 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
   const runOpencli = async (inv: OpencliInvocation): Promise<{ turnId: string }> => {
     const turnId = `oc-${++turnSeq}`;
+    // a live "running…" row appears immediately; the completed event with the
+    // same item id upgrades it in place (see EventFeed's started/completed pairing).
+    const command = `opencli ${inv.site} ${inv.command}`;
+    liveOcTurns.set(turnId, command);
     deps.emit({ kind: 'turn_started', turnId });
+    deps.emit({ kind: 'item', phase: 'started', item: { type: 'commandExecution', id: turnId, command } });
     try {
       const result = await deps.router.invoke(inv);
+      // Stop was pressed while this ran — the turn is already reported
+      // cancelled; drop the stale result instead of corrupting a later turn.
+      if (cancelledOcTurns.delete(turnId)) return { turnId };
+      liveOcTurns.delete(turnId);
+      deps.emit({
+        kind: 'item',
+        phase: 'completed',
+        item: { type: 'commandExecution', id: turnId, command, exitCode: result.ok ? 0 : 1 },
+      });
       const message = opencliResultToUx(result, inv, `ux-oc-${++uxSeq}`, deps.now());
       if (message.kind === 'login') {
         const loginUrl = (message.spec as { loginUrl?: string }).loginUrl;
         pendingLogin.set(message.id, { site: inv.site, loginUrl });
       }
       deps.emit({ kind: 'ux', message });
-      deps.emit({ kind: 'turn_completed', status: result.ok ? 'completed' : 'failed' });
+      deps.emit({ kind: 'turn_completed', status: result.ok ? 'completed' : 'failed', turnId });
     } catch (err) {
+      if (cancelledOcTurns.delete(turnId)) return { turnId };
+      liveOcTurns.delete(turnId);
+      // close the "running…" row too, or it spins forever
+      deps.emit({
+        kind: 'item',
+        phase: 'completed',
+        item: { type: 'commandExecution', id: turnId, command, exitCode: 1 },
+      });
       deps.emit({ kind: 'error', message: errText(err) });
-      deps.emit({ kind: 'turn_completed', status: 'failed' });
+      deps.emit({ kind: 'turn_completed', status: 'failed', turnId });
     }
     return { turnId };
+  };
+
+  /**
+   * Kick a codex turn (no echo, no /opencli parsing — submit/steer own those).
+   * Synthetic boot turn: the first submit pays a multi-second sandbox+codex
+   * boot — flip the panel to "working" NOW (codex's real turn_started retires
+   * it, see buildSession). Any failure on this path must close the turn and
+   * surface an error, or the journey dies at step 1 with zero feedback.
+   */
+  const startCodexTurn = async (text: string): Promise<{ turnId: string }> => {
+    const bootTurnId = `boot-${++turnSeq}`;
+    pendingBootTurns.add(bootTurnId);
+    deps.emit({ kind: 'turn_started', turnId: bootTurnId });
+    try {
+      // A conversation reset mid-boot fails the OLD boot (ensureStarted's gen
+      // check) — the user's message must ride the FRESH thread instead of being
+      // dropped with an error, so re-enter once. Awaiting the old startPromise
+      // first keeps boots serialized (never two sandbox.start races).
+      for (let attempt = 0; ; attempt++) {
+        const genBefore = conversationGen;
+        try {
+          await ensureStarted();
+        } catch (err) {
+          if (attempt === 0 && errText(err).includes('reset during boot')) continue;
+          throw err;
+        }
+        if (genBefore === conversationGen) break;
+        if (attempt > 0) throw new Error('conversation kept resetting during boot');
+      }
+      // Stop already reported this boot turn cancelled — honor it quietly.
+      // (A conversation RESET is different: the boot indicator was retired but
+      // the user's message still rides the fresh thread.)
+      if (cancelledBootTurns.delete(bootTurnId)) return { turnId: bootTurnId };
+      return await session!.submitTurn(text);
+    } catch (err) {
+      if (cancelledBootTurns.delete(bootTurnId)) return { turnId: bootTurnId };
+      pendingBootTurns.delete(bootTurnId);
+      deps.emit({ kind: 'error', message: `agent: ${errText(err)}` });
+      // harmless if the reset path already closed this id — the renderer
+      // ignores completions for unknown turn ids.
+      deps.emit({ kind: 'turn_completed', status: 'failed', turnId: bootTurnId });
+      return { turnId: bootTurnId };
+    }
   };
 
   const submit = async (text: string): Promise<{ turnId: string }> => {
@@ -422,16 +660,58 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     deps.emit({ kind: 'item', phase: 'completed', item: { type: 'userMessage', text } });
     const opencli = parseOpencliCommand(text);
     if (opencli) return runOpencli(opencli);
-    await ensureStarted();
-    return session!.submitTurn(text);
+    return startCodexTurn(text);
   };
 
+  /**
+   * Mid-run input. The renderer routes it here on its (event-derived, possibly
+   * stale) busy flag — branch on the AUTHORITATIVE session state: steer the
+   * live turn, and when there is none (or the steer loses the completion race /
+   * codex rejects it) the text becomes a fresh turn. The user's words are never
+   * silently dropped.
+   */
   const steer = async (text: string): Promise<void> => {
-    if (!session) return;
-    await session.steer(text);
+    deps.emit({ kind: 'item', phase: 'completed', item: { type: 'userMessage', text } });
+    // a /opencli command is a direct router invocation whoever types it —
+    // steering it into codex as prose would just confuse the model.
+    const opencli = parseOpencliCommand(text);
+    if (opencli) {
+      await runOpencli(opencli);
+      return;
+    }
+    if (session?.activeTurnId) {
+      try {
+        await session.steer(text);
+        return;
+      } catch (err) {
+        console.warn('[agent-runtime] steer fell back to a fresh turn:', errText(err));
+      }
+    }
+    await startCodexTurn(text);
   };
 
   const cancel = async (): Promise<void> => {
+    // Stop during the boot window: report each pending boot turn cancelled NOW
+    // (immediate feedback) and mark it so its in-flight startCodexTurn ends
+    // quietly instead of submitting.
+    for (const id of [...pendingBootTurns]) {
+      pendingBootTurns.delete(id);
+      cancelledBootTurns.add(id);
+      deps.emit({ kind: 'turn_completed', status: 'cancelled', turnId: id });
+    }
+    // /opencli router turns: the underlying command is bounded by the router's
+    // own deadline; report the cancel immediately — close the "running…" row
+    // AND the turn — and drop the late result when the invoke finally settles.
+    for (const [id, command] of [...liveOcTurns]) {
+      liveOcTurns.delete(id);
+      cancelledOcTurns.add(id);
+      deps.emit({
+        kind: 'item',
+        phase: 'completed',
+        item: { type: 'commandExecution', id, command, exitCode: 130 },
+      });
+      deps.emit({ kind: 'turn_completed', status: 'cancelled', turnId: id });
+    }
     if (!session) return;
     await session.cancel();
   };
@@ -445,14 +725,22 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     }
     // Block-decision card: a picked option or a free-text steer both feed back
     // into the conversation — steer the live turn, else start a fresh turn.
+    // The steer can still lose the race with turn completion (or codex rejects
+    // a steer into a review turn) — fall back to a fresh turn so the human's
+    // choice is NEVER silently dropped.
     if (pendingBlock.has(id)) {
       pendingBlock.delete(id);
       const r = result as UxBlockResult;
       if (r.action === 'ux_cancel') return;
       const text = (r.action === 'ux_instruct' ? r.instruction : r.choice)?.trim();
       if (!text) return;
-      if (session?.activeTurnId) await session.steer(text);
-      else await submit(text);
+      if (session?.activeTurnId) {
+        try {
+          await session.steer(text);
+        } catch {
+          await submit(text);
+        }
+      } else await submit(text);
       return;
     }
     const hitl = pendingHitl.get(id);
@@ -471,11 +759,15 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     // the agent's opencli (routed to the `render` profile) — so a retry succeeds.
     // We never call router.login (cookie adapter → system Chrome) and never claim
     // "signed in": we only confirm the tab is open and ask the agent to retry.
-    const url = loginUrl ?? `https://${site}.com`;
-    if (deps.openTab) deps.openTab(url);
+    //
+    // No fabricated URLs: a slug like `xhs` is not a domain, and auto-opening a
+    // guessed https://<slug>.com deep-links the user to a 404 (or worse, a
+    // squatter). Without a real loginUrl, show the navigate-yourself card.
+    const url = loginUrl && /^https?:\/\//i.test(loginUrl) ? loginUrl : undefined;
+    if (url && deps.openTab) deps.openTab(url);
     deps.emit({
       kind: 'ux',
-      message: loginOpenedUx(site, url, !!deps.openTab, `ux-oc-${++uxSeq}`, deps.now()),
+      message: loginOpenedUx(site, url, `ux-oc-${++uxSeq}`, deps.now()),
     });
   };
 
@@ -483,17 +775,29 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
   const newConversation = async (): Promise<TabGroupInfo> => {
     // Tear down the current codex thread so the NEXT submit lazily starts a fresh
-    // one (ensureStarted re-runs once startPromise is cleared). Per-turn HITL /
-    // login state belongs to the old conversation, so clear it too.
+    // one. Bump the generation FIRST: a submit that is mid-boot detects the reset
+    // and re-enters instead of driving a torn-down session, and an in-flight
+    // ensureStarted disposes the thread it just built (it belongs to the old
+    // conversation). Null `session` before disposing so the crash handler knows
+    // this teardown is deliberate. Per-turn HITL/login state goes with it.
+    conversationGen += 1;
+    // retire any outstanding synthetic boot turns — their submits will fail the
+    // gen check and re-enter, but the renderer's open-turn set must not be left
+    // holding ids that will never complete.
+    for (const boot of [...pendingBootTurns]) {
+      pendingBootTurns.delete(boot);
+      deps.emit({ kind: 'turn_completed', status: 'cancelled', turnId: boot });
+    }
+    pageFailStreak = 0;
     if (session) {
       const old = session;
       session = null;
       startPromise = null;
       await old.dispose();
-    }
-    if (codexHome) {
-      await codexHome.cleanup();
-      codexHome = null;
+      if (codexHome) {
+        await codexHome.cleanup();
+        codexHome = null;
+      }
     }
     pendingHitl.clear();
     pendingLogin.clear();
@@ -510,8 +814,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     pendingLogin.clear();
     loginPrompted.clear();
     pendingBlock.clear();
+    pendingBootTurns.clear();
+    cancelledBootTurns.clear();
+    offTabClose?.();
+    pageByTab.clear();
     pages.forEach((p) => p.dispose());
-    if (session) await session.dispose();
+    // null before disposing — the crash handler treats a still-current session's
+    // exit as an unexpected death and would emit a spurious error card.
+    const old = session;
+    session = null;
+    if (old) await old.dispose();
     if (codexHome) await codexHome.cleanup();
   };
 
@@ -526,28 +838,39 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   };
 }
 
-function loginOpenedUx(site: string, url: string, opened: boolean, id: string, ts: number): UxMessage {
+function loginOpenedUx(site: string, url: string | undefined, id: string, ts: number): UxMessage {
   return {
     id,
     kind: 'render',
     blocking: false,
     ts,
-    spec: opened
+    spec: url
       ? {
           title: `Opened ${site} login in Render`,
-          body: `Log in on the tab I just opened — your session stays inside Render. When you're done, ask me to retry and I'll use it.`,
+          body: `Log in on the tab I just opened — your session stays inside Render. When you're done, send "继续" (or anything) and I'll retry with it.`,
           items: [{ title: url, url }],
         }
       : {
           title: `Log in to ${site} in Render`,
-          body: `Open this page in a Render tab, log in, then ask me to retry.`,
-          items: [{ title: url, url }],
+          body: `I don't know this site's login URL — open ${site} in a new tab, log in there, then send "继续" and I'll retry with your session.`,
         },
   };
 }
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Streaming-draft body: prose only. Complete fenced blocks are removed and an
+ * unterminated trailing fence (a spec still being typed) is cut off — streaming
+ * half-written spec JSON is exactly why answer deltas used to be suppressed.
+ */
+function draftAnswerBody(text: string): string {
+  let t = text.replace(/```[a-z]*\n[\s\S]*?```/gi, '');
+  const lastFence = t.lastIndexOf('```');
+  if (lastFence >= 0) t = t.slice(0, lastFence);
+  return t.trim().slice(0, 2000);
 }
 
 /** Join a completed command item's output streams (for sentinel scanning). */

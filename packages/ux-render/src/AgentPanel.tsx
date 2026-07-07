@@ -26,6 +26,12 @@ export interface AgentPanelProps {
   onResultAction?: (action: ResultAction, message: UxMessage) => void;
   /** Delta 3: page ids already saved this session — marks their Save button done. */
   savedPageIds?: Set<string>;
+  /**
+   * Ux message ids already resolved before this mount (replayed by the host
+   * after a renderer reload). Their cards render inert instead of re-arming —
+   * the pendingHitl entries behind them are long gone in the main process.
+   */
+  initialResolvedIds?: readonly string[];
   /** Optional heading shown above the stream. */
   title?: string;
   /** True while a turn is running — drives the working dot + streaming row. */
@@ -37,10 +43,16 @@ export function AgentPanel({
   onResolve,
   onResultAction,
   savedPageIds,
+  initialResolvedIds,
   title,
   busy,
 }: AgentPanelProps) {
   const [resolved, setResolved] = useState<Record<string, UxResult>>({});
+  // resolutions replayed from the host — only the ids survive a reload
+  const replayResolved = useMemo(
+    () => new Set(initialResolvedIds ?? []),
+    [initialResolvedIds],
+  );
   const [verbose, setVerbose] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -177,11 +189,16 @@ export function AgentPanel({
                   m.page && savedPageIds?.has(m.page.id)
                     ? { ...m, page: { ...m.page, saved: true } }
                     : m;
+                // live resolution wins (it carries the actual result); a
+                // replayed id renders the neutral inert state
+                const resolution =
+                  resolved[m.id] ??
+                  (replayResolved.has(m.id) ? ("replayed" as const) : undefined);
                 return (
                   <UxSurface
                     key={block.key}
                     message={message}
-                    resolved={resolved[m.id]}
+                    resolved={resolution}
                     onResolve={(result) => handleResolve(m.id, result)}
                     {...(onResultAction ? { onAction: onResultAction } : {})}
                   />

@@ -3,11 +3,20 @@
  *
  * Routes an opencli invocation to the right hand:
  *   public/API adapters → @render/sandbox (headless, credential-blind)
- *   browser/cookie      → the real logged-in Chromium via the cdp-human-hand
- *                         relay (OPENCLI_CDP_ENDPOINT, client-pull)
+ *   browser/cookie      → the real logged-in Chromium over CDP: the injected
+ *                         `browserEndpoint` (Render's own debugging port) when
+ *                         available, else the cdp-human-hand relay
+ *                         (OPENCLI_CDP_ENDPOINT, client-pull)
  *
- * Classification comes from real `opencli list -f json` metadata (cached). A
- * not-logged-in browser adapter resolves to `needsLogin` rather than crashing.
+ * Classification comes from real `opencli list -f json` metadata (cached only
+ * once metadata actually loaded, so a cold-boot failure can't poison routing
+ * for the session). A not-logged-in adapter resolves to `needsLogin` rather
+ * than crashing — on BOTH routes, since a misclassified cookie adapter can
+ * fail with AUTH_REQUIRED in the sandbox too.
+ *
+ * Every exec is deadline-bounded (route-aware; the sandbox kills the child and
+ * resolves a synthetic exit 124), EXCEPT `login`, which legitimately waits on
+ * a human completing a login journey.
  */
 
 import type {
@@ -40,6 +49,14 @@ const DEFAULT_FALLBACK: Record<string, AdapterStrategy> = {
   '12306': 'cookie',
 };
 
+// Route-aware exec deadlines. Public/API adapters are pure network fetches;
+// browser-route commands drive a real page (login-walled sites are slow), so
+// they get more headroom. The internal `opencli list` metadata load is small
+// and must never wedge the first classification.
+const PUBLIC_TIMEOUT_MS = 60_000;
+const BROWSER_TIMEOUT_MS = 120_000;
+const METADATA_TIMEOUT_MS = 30_000;
+
 export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandle {
   const opencli = deps.opencliBin ?? 'opencli';
   const fallback = { ...DEFAULT_FALLBACK, ...(deps.fallback ?? {}) };
@@ -64,7 +81,7 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
 
   const ensureMeta = async (): Promise<void> => {
     if (meta.loaded) return;
-    await meta.load(() => run(['list', '-f', 'json']));
+    await meta.load(() => run(['list', '-f', 'json'], { timeoutMs: METADATA_TIMEOUT_MS }));
   };
 
   const classify = async (site: string, command: string): Promise<AdapterStrategy> => {
@@ -81,11 +98,21 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
       // metadata unavailable → lean on the allowlist, default public (sandbox)
       strategy = fallback[site] ?? 'public';
     }
-    classifyCache.set(cacheKey, strategy);
+    // Cache only metadata-backed classifications. A fallback answer derived
+    // from a failed `opencli list` (daemon cold boot, transient wedge) must be
+    // recomputed on the next invoke, or the site stays misrouted all session.
+    if (meta.loaded) classifyCache.set(cacheKey, strategy);
     return strategy;
   };
 
   const browserEndpoint = async (): Promise<string | null> => {
+    if (deps.browserEndpoint) {
+      try {
+        return toHttpEndpoint(await deps.browserEndpoint());
+      } catch {
+        /* preferred endpoint unavailable → fall back to the human-hand relay */
+      }
+    }
     if (!deps.humanHand) return null;
     return toHttpEndpoint(await deps.humanHand.cdpEndpoint());
   };
@@ -101,13 +128,43 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
       : invokeBrowser(inv, strategy, format, argv, m);
   };
 
+  /** needsLogin failure shape shared by both routes. */
+  const loginFailure = (
+    inv: OpencliInvocation,
+    strategy: AdapterStrategy,
+    ranOn: OpencliResult['ranOn'],
+    authRequired: boolean,
+    exec?: OpencliExec,
+    domain?: string,
+  ): OpencliResult => ({
+    ok: false,
+    strategy,
+    ranOn,
+    ...(exec?.stdout ? { raw: exec.stdout } : {}),
+    error: authRequired
+      ? 'login required'
+      : 'browser session not connected — open the site in a Render tab to connect and log in',
+    needsLogin: {
+      site: inv.site,
+      loginUrl:
+        (exec && extractLoginUrl(exec, domain)) ?? (domain ? `https://${domain}` : undefined),
+    },
+  });
+
   const invokePublic = async (
     inv: OpencliInvocation,
     strategy: AdapterStrategy,
     format: OpencliFormat,
     argv: string[],
   ): Promise<OpencliResult> => {
-    const exec = await run(argv);
+    const exec = await run(argv, { timeoutMs: PUBLIC_TIMEOUT_MS });
+    // A cookie adapter misrouted here (metadata gap / fallback default) fails
+    // with AUTH_REQUIRED or BROWSER_CONNECT — map it to the same needsLogin
+    // recovery card the browser route produces instead of a raw stderr dump.
+    const authRequired = isAuthRequired(exec);
+    if (authRequired || isBrowserUnavailable(exec)) {
+      return loginFailure(inv, strategy, 'sandbox', authRequired, exec, meta.domainFor(inv.site));
+    }
     return toResult(exec, strategy, 'sandbox', format);
   };
 
@@ -119,31 +176,26 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     m: CommandMeta | undefined,
   ): Promise<OpencliResult> => {
     const endpoint = await browserEndpoint();
-    const loginUrl = (exec?: OpencliExec): string | undefined =>
-      (exec && extractLoginUrl(exec, m?.domain)) ?? (m?.domain ? `https://${m.domain}` : undefined);
+    const domain = m?.domain ?? meta.domainFor(inv.site);
 
     if (!endpoint) {
-      // No human-hand wired → we cannot reach the logged-in browser at all.
+      // No CDP route wired → we cannot reach the logged-in browser at all.
       return {
         ok: false,
         strategy,
         ranOn: 'cdp-human-hand',
         error: 'no CDP endpoint configured (human-hand unavailable)',
-        needsLogin: { site: inv.site, loginUrl: loginUrl() },
+        needsLogin: { site: inv.site, loginUrl: domain ? `https://${domain}` : undefined },
       };
     }
 
-    const exec = await run(argv, { env: { OPENCLI_CDP_ENDPOINT: endpoint } });
-    if (isAuthRequired(exec) || isBrowserUnavailable(exec)) {
-      return {
-        ok: false,
-        strategy,
-        ranOn: 'cdp-human-hand',
-        error: isAuthRequired(exec)
-          ? 'login required'
-          : 'browser session not connected — open the site in a Render tab to connect and log in',
-        needsLogin: { site: inv.site, loginUrl: loginUrl(exec) },
-      };
+    const exec = await run(argv, {
+      env: { OPENCLI_CDP_ENDPOINT: endpoint },
+      timeoutMs: BROWSER_TIMEOUT_MS,
+    });
+    const authRequired = isAuthRequired(exec);
+    if (authRequired || isBrowserUnavailable(exec)) {
+      return loginFailure(inv, strategy, 'cdp-human-hand', authRequired, exec, domain);
     }
     return toResult(exec, strategy, 'cdp-human-hand', format);
   };
@@ -154,7 +206,8 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
       throw new Error('login: no CDP endpoint (human-hand required to drive the login tab)');
     }
     // `opencli <site> login` opens the site in the real tab (via the relay) and
-    // waits for the human to authenticate.
+    // waits for the human to authenticate — deliberately UNBOUNDED: a deadline
+    // here would kill the login tab under the user mid-typing.
     const exec = await run([site, 'login', '-f', 'json'], {
       env: { OPENCLI_CDP_ENDPOINT: endpoint },
     });

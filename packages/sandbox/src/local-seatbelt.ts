@@ -30,6 +30,15 @@ import { resolveWritableRoots, seatbeltProfile } from './seatbelt.js';
 
 const isDarwin = process.platform === 'darwin';
 
+/** Grace between SIGTERM and SIGKILL when an exec deadline expires. */
+const SIGKILL_GRACE_MS = 5_000;
+
+/** Synthetic-exit stderr note for a timed-out exec. */
+function appendTimeoutNote(stderr: string, cmd: string, timeoutMs: number): string {
+  const note = `[render/sandbox] ${cmd} timed out after ${Math.round(timeoutMs / 1000)}s and was killed`;
+  return stderr ? `${stderr}\n${note}` : note;
+}
+
 export interface LocalSeatbeltOptions {
   /** disable seatbelt wrapping for exec (e.g. on non-macOS); auto on non-darwin */
   disableSeatbelt?: boolean;
@@ -82,10 +91,57 @@ export class LocalSeatbeltSandbox implements SandboxProvider {
       const child = nodeSpawn(program, argv, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+      let killTimer: NodeJS.Timeout | null = null;
+
+      // Deadline (protocol SandboxSpawnOptions.timeoutMs): a wedged adapter or
+      // hung network call must never suspend the caller forever. SIGTERM first
+      // so opencli can clean up; escalate to SIGKILL if it lingers. sandbox-exec
+      // execs the wrapped program in-place, so killing this pid kills the real
+      // command too. The result is a SYNTHETIC exit 124 (the `timeout(1)`
+      // convention) with a stderr note.
+      const deadline =
+        typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0
+          ? setTimeout(() => {
+              timedOut = true;
+              try {
+                child.kill('SIGTERM');
+              } catch {
+                /* already gone */
+              }
+              killTimer = setTimeout(() => {
+                try {
+                  child.kill('SIGKILL');
+                } catch {
+                  /* already gone */
+                }
+              }, SIGKILL_GRACE_MS);
+            }, opts.timeoutMs)
+          : null;
+
+      const clearTimers = (): void => {
+        if (deadline) clearTimeout(deadline);
+        if (killTimer) clearTimeout(killTimer);
+      };
+
       child.stdout.on('data', (d) => (stdout += d.toString()));
       child.stderr.on('data', (d) => (stderr += d.toString()));
-      child.on('error', reject);
-      child.on('close', (code) => resolve({ exitCode: code ?? -1, stdout, stderr }));
+      child.on('error', (err) => {
+        clearTimers();
+        reject(err);
+      });
+      child.on('close', (code) => {
+        clearTimers();
+        if (timedOut) {
+          resolve({
+            exitCode: 124,
+            stdout,
+            stderr: appendTimeoutNote(stderr, cmd, opts.timeoutMs ?? 0),
+          });
+          return;
+        }
+        resolve({ exitCode: code ?? -1, stdout, stderr });
+      });
     });
   }
 
