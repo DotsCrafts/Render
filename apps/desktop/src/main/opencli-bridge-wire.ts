@@ -1,15 +1,16 @@
 /**
- * Flag-gated wire-in for @render/opencli-bridge (Milestone 1, default OFF).
+ * Wire-in for @render/opencli-bridge (default ON; `RENDER_OPENCLI_BRIDGE=0`
+ * disables it and nothing is constructed).
  *
- * When `RENDER_OPENCLI_BRIDGE=1`, Render registers itself as its OWN, distinct
- * opencli browser profile (contextId `render`, override via `RENDER_OPENCLI_PROFILE`)
- * and serves `/ext` browser commands by driving its OWN Chromium — so opencli's
+ * When enabled, Render registers itself as its OWN, distinct opencli browser
+ * profile (contextId `render`, override via `RENDER_OPENCLI_PROFILE`) and serves
+ * `/ext` browser commands by driving its OWN Chromium — so opencli's
  * cookie/browser adapters run inside Render, never system Chrome. Crucially it does
  * NOT register as the system-Chrome extension's contextId (`3k59e8nw`), so system
- * Chrome stays connected on its own profile, untouched: opencli routes to Render
- * only when a caller targets `--profile render` / `OPENCLI_PROFILE=render`, and the
- * unqualified default keeps routing to system Chrome. Inert by default: with the
- * flag unset this module does nothing and nothing is constructed.
+ * Chrome stays connected on its own profile, untouched. While Render runs it also
+ * binds the daemon's defaultContextId to `render` (see bindDefaultProfile), so
+ * unqualified opencli commands route to Render; the binding is restored on
+ * dispose, handing the default back to system Chrome.
  *
  * Milestone 3 is MULTI-LEASE: the bridge owns a registry of leases (one per
  * `tabs new`), each its own CDP target with a stable targetId. Each lease is a
@@ -85,9 +86,10 @@ export interface OpencliBridgeWireDeps {
 const AGENT_GROUP = { id: 'agent', label: 'Agent', color: '#7c93ff' } as const;
 
 /**
- * Returns `null` when the flag is off (the default) — callers treat null as
- * "bridge disabled" and skip disposal. Best-effort: a failed daemon connect is
- * logged via onError and retried by the bridge, never crashing Render boot.
+ * Returns `null` only when disabled via `RENDER_OPENCLI_BRIDGE=0` — callers
+ * treat null as "bridge disabled" and skip disposal. Best-effort: a failed
+ * daemon connect is logged via onError and retried by the bridge, never
+ * crashing Render boot.
  */
 export function maybeWireOpencliBridge(deps: OpencliBridgeWireDeps): OpencliBridgeWire | null {
   // Default ON — Render serves opencli's cookie/browser adapters from its own

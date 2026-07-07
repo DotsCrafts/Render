@@ -15,6 +15,10 @@ export interface ActivityStep {
   kind: "reason" | "command" | "you" | "muted" | "error";
   key: string;
   text: string;
+  /** codex item id — lets started→completed upgrades and reasoning merges target this step */
+  itemId?: string;
+  /** true for a commandExecution that has started but not yet completed */
+  pending?: boolean;
 }
 
 export type Block =
@@ -34,10 +38,21 @@ function commandStep(item: CodexItem): ActivityStep {
   };
 }
 
+// `render-open` / `render-page` are Render-owned shims: the main process
+// intercepts their COMPLETED events (opening the tab / delivering the page),
+// so the raw sentinel command must not leak into the feed at the started
+// phase either. Matches raw and shell-wrapped forms (`zsh -lc 'render-open …'`).
+const RENDER_SHIM_RE = /(?:^|[\s;&|/"'])render-(?:open|page)\b/;
+const isRenderShim = (command: string | undefined): boolean =>
+  !!command && RENDER_SHIM_RE.test(command);
+
 /** Fold the ordered event list into ordered, render-ready blocks. */
 export function groupEvents(events: AgentEvent[]): Block[] {
   const blocks: Block[] = [];
   let lane: Extract<Block, { type: "activity" }> | null = null;
+  // started commandExecutions by item id — upgraded IN PLACE on completion so
+  // a command renders exactly one row (spinner while running, exit when done).
+  const runningCommands = new Map<string, ActivityStep>();
 
   const pushStep = (step: ActivityStep): void => {
     if (!lane) {
@@ -48,6 +63,15 @@ export function groupEvents(events: AgentEvent[]): Block[] {
   };
   const breakLane = (): void => {
     lane = null;
+  };
+  // The trailing reason step, when its item id is compatible (equal, or either
+  // absent — AgentEvent.itemId is optional): codex streams reasoning as many
+  // tiny fragments, which merge into one readable step instead of one row each.
+  const trailingReason = (itemId: string | undefined): ActivityStep | null => {
+    const last = lane?.steps[lane.steps.length - 1];
+    if (!last || last.kind !== "reason") return null;
+    if (last.itemId && itemId && last.itemId !== itemId) return null;
+    return last;
   };
 
   events.forEach((event, i) => {
@@ -61,8 +85,24 @@ export function groupEvents(events: AgentEvent[]): Block[] {
         blocks.push({ type: "error", key: `err-${i}`, text: event.message });
         return;
       case "item": {
-        if (event.phase === "started") return; // avoid dupes; use completed
         const item = event.item;
+        const itemId = typeof item.id === "string" ? item.id : undefined;
+        if (event.phase === "started") {
+          // Mid-turn streaming: a started command shows immediately as an
+          // in-progress step; every other item kind still waits for completion.
+          if (item.type !== "commandExecution") return;
+          if (isRenderShim(item.command)) return;
+          const step: ActivityStep = {
+            kind: "command",
+            key: "$",
+            text: `${item.command ?? ""}`.trim(),
+            pending: true,
+            ...(itemId ? { itemId } : {}),
+          };
+          if (itemId) runningCommands.set(itemId, step);
+          pushStep(step);
+          return;
+        }
         if (item.type === "userMessage") {
           breakLane();
           blocks.push({ type: "human", key: `you-${i}`, text: item.text ?? "" });
@@ -75,7 +115,35 @@ export function groupEvents(events: AgentEvent[]): Block[] {
           return;
         }
         if (item.type === "commandExecution") {
-          pushStep(commandStep(item));
+          if (isRenderShim(item.command)) return;
+          const done = commandStep(item);
+          const started = itemId ? runningCommands.get(itemId) : undefined;
+          if (started && itemId) {
+            // upgrade the in-progress row in place — no duplicate rows
+            runningCommands.delete(itemId);
+            started.text = done.text;
+            started.pending = false;
+            return;
+          }
+          pushStep(done);
+          return;
+        }
+        if (item.type === "reasoning") {
+          // the completed reasoning item carries the FULL text — replace the
+          // accumulated fragment step rather than adding a duplicate
+          const prev = trailingReason(itemId);
+          const full = item.text ?? "";
+          if (prev) {
+            if (full.trim()) prev.text = full;
+            return;
+          }
+          if (full.trim())
+            pushStep({
+              kind: "reason",
+              key: "reason",
+              text: full,
+              ...(itemId ? { itemId } : {}),
+            });
           return;
         }
         // plan / fileChange / mcpToolCall / unknown → a quiet muted step
@@ -86,9 +154,20 @@ export function groupEvents(events: AgentEvent[]): Block[] {
         });
         return;
       }
-      case "reasoning":
-        pushStep({ kind: "reason", key: "reason", text: event.text });
+      case "reasoning": {
+        const prev = trailingReason(event.itemId);
+        if (prev) {
+          prev.text = `${prev.text}${event.text}`;
+          return;
+        }
+        pushStep({
+          kind: "reason",
+          key: "reason",
+          text: event.text,
+          ...(event.itemId ? { itemId: event.itemId } : {}),
+        });
         return;
+      }
       case "sandbox":
         pushStep({
           kind: "muted",
@@ -109,7 +188,16 @@ export function groupEvents(events: AgentEvent[]): Block[] {
     }
   });
 
-  return blocks;
+  // ux surfaces dedupe LAST-WINS by message id: the runtime re-emits updated
+  // cards (e.g. a streaming draft answer) under a stable id — the last emission
+  // replaces earlier ones, rendered at the LAST occurrence's position.
+  const lastSurfacePos = new Map<string, number>();
+  blocks.forEach((b, pos) => {
+    if (b.type === "surface") lastSurfacePos.set(b.key, pos);
+  });
+  return blocks.filter(
+    (b, pos) => b.type !== "surface" || lastSurfacePos.get(b.key) === pos,
+  );
 }
 
 // ── block renderers ──────────────────────────────────────────────────────────
@@ -162,7 +250,9 @@ export function ActivityLane({
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const n = steps.length;
+  // "N steps" counts real work (commands / tool calls) — reasoning narration
+  // would otherwise inflate the count into the hundreds on a chatty model.
+  const n = steps.filter((s) => s.kind === "command" || s.kind === "muted").length;
   const dur =
     typeof durationMs === "number" && durationMs > 0
       ? `Worked for ${(durationMs / 1000).toFixed(durationMs >= 9950 ? 0 : 1)}s · `
@@ -183,7 +273,7 @@ export function ActivityLane({
         </svg>
         <span className="rd-activity-summary">
           {dur}
-          {n} step{n === 1 ? "" : "s"}
+          {n > 0 ? `${n} step${n === 1 ? "" : "s"}` : "reasoning"}
         </span>
         {!open && preview ? (
           <span className="rd-activity-meta">· {preview}</span>
@@ -196,9 +286,14 @@ export function ActivityLane({
       {open ? (
         <div className="rd-activity-body">
           {steps.map((s, i) => (
-            <div key={i} className={`rd-step ${s.kind}`}>
+            <div key={i} className={`rd-step ${s.kind}${s.pending ? " pending" : ""}`}>
               <span className="rd-step-key">{s.key}</span>
               <span className="rd-step-val">{s.text}</span>
+              {s.pending ? (
+                <span className="rd-step-run" aria-label="running">
+                  …
+                </span>
+              ) : null}
             </div>
           ))}
         </div>

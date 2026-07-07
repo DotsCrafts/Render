@@ -28,7 +28,12 @@ export interface PagesStore {
   list(): SavedPageMeta[];
   /** The newest version record for a page, or null. */
   get(id: string): SavedPageRecord | null;
-  /** Re-serve a page's newest spec via the ux-server and return the UxPage. */
+  /**
+   * Re-serve a page's newest spec via the ux-server and return the UxPage. The
+   * store retains NO server handles — the CALLER owns disposal (the IPC broker
+   * registers reopened pages, deduped per id, and reaps them on tab close /
+   * window close).
+   */
   reopen(id: string): UxPage | null;
 }
 

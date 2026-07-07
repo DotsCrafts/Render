@@ -9,6 +9,8 @@ interface Props {
   onResultAction?: (action: ResultAction, message: UxMessage) => void;
   /** ids of pages the human has saved this session (marks the Save button done). */
   savedPageIds?: Set<string>;
+  /** ux ids resolved before a renderer reload — replayed cards render inert. */
+  initialResolvedIds?: readonly string[];
   /** True while a turn is running — drives the panel's working/streaming state. */
   busy?: boolean;
 }
@@ -24,6 +26,7 @@ export function AgentPanel({
   onResolve,
   onResultAction,
   savedPageIds,
+  initialResolvedIds,
   busy,
 }: Props): ReactElement {
   return (
@@ -36,6 +39,7 @@ export function AgentPanel({
         busy={busy}
         {...(onResultAction ? { onResultAction } : {})}
         {...(savedPageIds ? { savedPageIds } : {})}
+        {...(initialResolvedIds ? { initialResolvedIds } : {})}
       />
     </aside>
   );

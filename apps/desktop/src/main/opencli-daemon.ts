@@ -29,13 +29,22 @@ export async function ensureOpencliDaemon(
 
   const command = resolveOpencliCommand(opts.bin);
   const timeoutMs = opts.timeoutMs ?? 15_000;
-  void execFileAsync(command.bin, [...command.prefixArgs, 'doctor'], timeoutMs).catch(() => {
-    // `doctor` is allowed to exit non-zero while Render's profile is not
-    // connected yet. We only need it to kick OpenCLIApp's managed daemon awake.
+  // `doctor` is allowed to exit non-zero while Render's profile is not connected
+  // yet — we only need it to kick OpenCLIApp's managed daemon awake, so most kick
+  // failures are ignorable. A MISSING binary (spawn ENOENT) can never wake
+  // anything though: flag it so the poll below short-circuits instead of burning
+  // the full deadline on a machine without opencli installed.
+  let binaryMissing = false;
+  void execFileAsync(command.bin, [...command.prefixArgs, 'doctor'], timeoutMs).catch((err) => {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') binaryMissing = true;
   });
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (binaryMissing) {
+      console.warn(`[opencli-daemon] opencli binary not found (${command.bin}) — warmup skipped.`);
+      return false;
+    }
     if (await isDaemonReachable(port)) return true;
     await delay(300);
   }

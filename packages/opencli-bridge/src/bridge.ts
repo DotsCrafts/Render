@@ -36,10 +36,12 @@ const CLOSE_GRACE_MS = 2_000;
  * (navigate/eval timeouts), but a CDP send against a wedged renderer can hang
  * past all of them; the deadline answers the daemon with a failure and frees
  * the lane so one stuck command can't stall its session (or, for exclusive
- * ops, everyone). The abandoned dispatch keeps running detached — its late
- * result is discarded (the daemon has already been answered for that id).
+ * ops, everyone). Honors the frame's `timeout` field (seconds, capped at MAX);
+ * defaults when absent. The abandoned dispatch keeps running detached — its
+ * late result is discarded (the daemon has already been answered for that id).
  */
-const DISPATCH_DEADLINE_MS = 45_000;
+const DISPATCH_DEADLINE_DEFAULT_MS = 45_000;
+const DISPATCH_DEADLINE_MAX_MS = 60_000;
 
 export interface BridgeDeps {
   /**
@@ -118,11 +120,17 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
   // the shared Electron tab host — keep an exclusive global lane. A plain
   // TargetProvider shares lease state across sessions, so it keeps the strict
   // global FIFO (every command exclusive). Each dispatch is additionally
-  // bounded by the 45 s deadline so no single command can wedge its lane.
+  // bounded by the deadline so no single command can wedge its lane.
   const lanes = createDispatchLanes();
   const registry = isSessionRegistry(deps.provider) ? deps.provider : null;
   const plainProvider = registry ? null : (deps.provider as TargetProvider);
-  const deadlineMs = deps.dispatchDeadlineMs ?? DISPATCH_DEADLINE_MS;
+
+  /** Deadline for one dispatch: the frame's `timeout` (seconds, capped), or the configured default. */
+  const cmdDeadlineMs = (cmd: CommandFrame): number => {
+    const seconds = typeof cmd.timeout === 'number' && cmd.timeout > 0 ? cmd.timeout : undefined;
+    if (seconds !== undefined) return Math.min(seconds * 1000, DISPATCH_DEADLINE_MAX_MS);
+    return deps.dispatchDeadlineMs ?? DISPATCH_DEADLINE_DEFAULT_MS;
+  };
 
   const onMessage = (socket: WebSocket, raw: string): Promise<void> => {
     let cmd: CommandFrame;
@@ -137,7 +145,7 @@ export function createOpencliBridge(deps: BridgeDeps): BridgeHandle {
       let result: ResultFrame;
       try {
         const provider = registry ? registry.providerFor(cmd) : plainProvider!;
-        result = await withDeadline(cmd.id, deadlineMs, dispatch(provider, cmd, deps.caps ?? {}));
+        result = await withDeadline(cmd.id, cmdDeadlineMs(cmd), dispatch(provider, cmd, deps.caps ?? {}));
         // completion counts as activity too, so a command longer than the idle
         // timeout doesn't get its session reaped right at the finish line.
         registry?.touch(cmd);
