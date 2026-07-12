@@ -8,6 +8,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   IPC,
   type AgentEvent,
+  type ConnectorInfo,
   type RenderApi,
   type TabState,
   type UxResult,
@@ -41,6 +42,11 @@ const api: RenderApi = {
   codexLoginOAuth: () => ipcRenderer.invoke(IPC.codexLoginOAuth),
   codexLogout: () => ipcRenderer.invoke(IPC.codexLogout),
 
+  connectorsList: () => ipcRenderer.invoke(IPC.connectorsList),
+  connectorsRefresh: (site?: string) => ipcRenderer.invoke(IPC.connectorsRefresh, site),
+  connectorsConnect: (site: string) => ipcRenderer.invoke(IPC.connectorsConnect, site),
+  connectorsDisconnect: (site: string) => ipcRenderer.invoke(IPC.connectorsDisconnect, site),
+
   onAgentEvent: (cb: (e: AgentEvent) => void) => {
     const listener = (_e: unknown, event: AgentEvent): void => cb(event);
     ipcRenderer.on(IPC.agentEvent, listener);
@@ -50,6 +56,11 @@ const api: RenderApi = {
     const listener = (_e: unknown, tabs: TabState[]): void => cb(tabs);
     ipcRenderer.on(IPC.tabsChanged, listener);
     return () => ipcRenderer.removeListener(IPC.tabsChanged, listener);
+  },
+  onConnectorsChanged: (cb: (connectors: ConnectorInfo[]) => void) => {
+    const listener = (_e: unknown, connectors: ConnectorInfo[]): void => cb(connectors);
+    ipcRenderer.on(IPC.connectorsChanged, listener);
+    return () => ipcRenderer.removeListener(IPC.connectorsChanged, listener);
   },
 };
 

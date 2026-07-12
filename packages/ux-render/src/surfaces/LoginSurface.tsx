@@ -106,8 +106,9 @@ export function LoginSurface({
             aria-hidden
           />
           <span>
-            Opening the sign-in page in Render — complete the login there, then
-            ask me to retry.
+            Opening the sign-in page in Render — complete the login there.
+            Render watches for it and continues automatically (see Connectors
+            for the live status).
           </span>
         </div>
       )}

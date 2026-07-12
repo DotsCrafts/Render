@@ -7,6 +7,7 @@ import { Omnibox } from './components/Omnibox.js';
 import { FloatingInput } from './components/FloatingInput.js';
 import { AgentPanel } from './components/AgentPanel.js';
 import { CodexSettings } from './components/CodexSettings.js';
+import { Connectors } from './components/Connectors.js';
 import { SavedPagesGallery } from './components/SavedPagesGallery.js';
 import { Home } from './components/Home.js';
 
@@ -19,6 +20,7 @@ export function App(): ReactElement {
   const { tabs, activeTab, events, busy, resolvedUxIds, actions } = useRenderState();
   const [showSettings, setShowSettings] = useState(false);
   const [showGallery, setShowGallery] = useState(false);
+  const [showConnectors, setShowConnectors] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   // Delta 2: a seeded prefill for the floating input (Refine / Ask follow-up).
   const [seed, setSeed] = useState<{ text: string; nonce: number }>({ text: '', nonce: 0 });
@@ -28,10 +30,11 @@ export function App(): ReactElement {
   const [savedPageIds, setSavedPageIds] = useState<Set<string>>(() => new Set());
 
   // Native page views composite over the chrome renderer, so they'd occlude any
-  // renderer modal (settings / saved-pages gallery). Hide them while one is open.
+  // renderer modal (settings / saved-pages gallery / connectors). Hide them
+  // while one is open.
   useEffect(() => {
-    void window.render.setOverlay(showSettings || showGallery);
-  }, [showSettings, showGallery]);
+    void window.render.setOverlay(showSettings || showGallery || showConnectors);
+  }, [showSettings, showGallery, showConnectors]);
 
   // ⌘K / Ctrl+K — the advertised keyboard path back to the intent input. This
   // listener covers keystrokes while the chrome renderer has focus; when a
@@ -116,6 +119,18 @@ export function App(): ReactElement {
         />
         <button
           className="settings-btn"
+          onClick={() => setShowConnectors(true)}
+          aria-label="connectors"
+          title="Connectors — site logins the agent can use"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+            <path d="M6 1.5v3M10 1.5v3" strokeLinecap="round" />
+            <path d="M4.5 4.5h7v3.2a3.5 3.5 0 01-7 0z" strokeLinejoin="round" />
+            <path d="M8 11.2v1.6a1.7 1.7 0 01-1.7 1.7H4.8" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button
+          className="settings-btn"
           onClick={() => setShowGallery(true)}
           aria-label="saved pages"
           title="Saved pages"
@@ -138,6 +153,7 @@ export function App(): ReactElement {
       </header>
 
       {showSettings ? <CodexSettings onClose={() => setShowSettings(false)} /> : null}
+      {showConnectors ? <Connectors onClose={() => setShowConnectors(false)} /> : null}
       {showGallery ? (
         <SavedPagesGallery
           onClose={() => setShowGallery(false)}

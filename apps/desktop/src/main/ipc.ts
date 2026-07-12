@@ -11,6 +11,7 @@ import { ipcMain, type WebContents } from 'electron';
 import {
   IPC,
   type AgentEvent,
+  type ConnectorInfo,
   type TabState,
   type UxResult,
   type CodexProviderConfig,
@@ -20,6 +21,7 @@ import { CHROME_IPC } from '../shared/chrome-channels.js';
 import type { TabManager } from './tabs.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import type { CodexProvider } from './codex-provider.js';
+import type { ConnectorService } from './connectors.js';
 import type { PagesStore } from './pages-store.js';
 import type { UxPage } from './ux-server.js';
 
@@ -33,18 +35,21 @@ export interface IpcDeps {
   codex: CodexProvider;
   /** saved render-pages store (Delta 3) */
   pages: PagesStore;
+  /** site login state (the Connectors page) */
+  connectors: ConnectorService;
 }
 
 export interface IpcBroker {
   emitAgent: (event: AgentEvent) => void;
   emitTabs: (snapshot: TabState[]) => void;
+  emitConnectors: (snapshot: ConnectorInfo[]) => void;
   dispose: () => void;
 }
 
 const MAX_EVENT_LOG = 500;
 
 export function registerIpc(deps: IpcDeps): IpcBroker {
-  const { chrome, tabs, agent, humanHand, codex, pages } = deps;
+  const { chrome, tabs, agent, humanHand, codex, pages, connectors } = deps;
 
   // Durable event stream: the renderer holds events in React state, which is
   // wiped on any reload (HMR, crash, accidental navigation). Buffer them here in
@@ -58,6 +63,9 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
   };
   const emitTabs = (snapshot: TabState[]): void => {
     if (!chrome.isDestroyed()) chrome.send(IPC.tabsChanged, snapshot);
+  };
+  const emitConnectors = (snapshot: ConnectorInfo[]): void => {
+    if (!chrome.isDestroyed()) chrome.send(IPC.connectorsChanged, snapshot);
   };
 
   // Agent-facing handlers reject into promises the renderer fires-and-forgets
@@ -187,6 +195,14 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
       return codex.getStatus();
     },
 
+    // connectors — the site login-state page. Rejections propagate to the
+    // renderer's own catch (the modal shows them inline; nothing here belongs
+    // in the agent feed).
+    [IPC.connectorsList]: () => connectors.list(),
+    [IPC.connectorsRefresh]: (_e, site?: string) => connectors.refresh(site),
+    [IPC.connectorsConnect]: (_e, site: string) => connectors.connect(site),
+    [IPC.connectorsDisconnect]: (_e, site: string) => connectors.disconnect(site),
+
     [CHROME_IPC.back]: (_e, tabId: string) => tabs.goBack(tabId),
     [CHROME_IPC.forward]: (_e, tabId: string) => tabs.goForward(tabId),
     [CHROME_IPC.reload]: (_e, tabId: string) => tabs.reload(tabId),
@@ -204,6 +220,7 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
   return {
     emitAgent,
     emitTabs,
+    emitConnectors,
     dispose: () => {
       unsubscribeTabClose();
       for (const page of reopenedPages.values()) page.dispose();
