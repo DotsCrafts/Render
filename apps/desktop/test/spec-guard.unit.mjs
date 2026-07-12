@@ -1,5 +1,5 @@
 // spec-guard — deliver-time validation of agent-authored page specs.
-// Pins the review finding: terminal actions hidden in ARRAY-form `on` bindings
+// Pins the review finding: non-page actions hidden in ARRAY-form `on` bindings
 // or `watch` bindings must not sail past the guard.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,23 +27,23 @@ test('valid spec with allowlisted ux_data mount passes', () => {
   assert.deepEqual(r.errors, []);
 });
 
-test('terminal ux_submit in a plain binding is rejected', () => {
+test('non-page action ux_instruct in a plain binding is rejected', () => {
   const r = validatePageSpec(
-    spec({ root: el('Button', { on: { press: { action: 'ux_submit' } } }) }),
+    spec({ root: el('Button', { on: { press: { action: 'ux_instruct' } } }) }),
     '',
   );
   assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /ux_submit/);
+  assert.match(r.errors.join('\n'), /ux_instruct/);
 });
 
-test('terminal action hidden in an ARRAY binding is rejected', () => {
+test('non-page action hidden in an ARRAY binding is rejected', () => {
   const r = validatePageSpec(
     spec({
       root: el('Button', {
         on: {
           press: [
             { action: 'ux_data', params: { key: 'k', request: { site: 'arxiv', command: 'search' } } },
-            { action: 'ux_confirm' },
+            { action: 'ux_instruct' },
           ],
         },
       }),
@@ -51,19 +51,19 @@ test('terminal action hidden in an ARRAY binding is rejected', () => {
     'arxiv search',
   );
   assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /ux_confirm/);
+  assert.match(r.errors.join('\n'), /ux_instruct/);
 });
 
-test('terminal action in a WATCH binding is rejected', () => {
+test('non-page action in a WATCH binding is rejected', () => {
   const r = validatePageSpec(
-    spec({ root: el('Stack', { watch: { '/q': { action: 'ux_cancel' } } }) }),
+    spec({ root: el('Stack', { watch: { '/q': { action: 'ux_instruct' } } }) }),
     '',
   );
   assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /ux_cancel/);
+  assert.match(r.errors.join('\n'), /ux_instruct/);
 });
 
-test('terminal action nested in an onSuccess chain is rejected', () => {
+test('non-page action nested in an onSuccess chain is rejected', () => {
   const r = validatePageSpec(
     spec({
       root: el('Button', {
@@ -71,7 +71,7 @@ test('terminal action nested in an onSuccess chain is rejected', () => {
           press: {
             action: 'ux_data',
             params: { key: 'k', request: { site: 'arxiv', command: 'search' } },
-            onSuccess: { action: 'ux_submit' },
+            onSuccess: { action: 'ux_instruct' },
           },
         },
       }),
@@ -79,7 +79,7 @@ test('terminal action nested in an onSuccess chain is rejected', () => {
     'arxiv search',
   );
   assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /ux_submit/);
+  assert.match(r.errors.join('\n'), /ux_instruct/);
 });
 
 test('ux_data request outside the --allow list is rejected, agent-actionably', () => {
