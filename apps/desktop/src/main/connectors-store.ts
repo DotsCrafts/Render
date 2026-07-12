@@ -26,6 +26,14 @@ export interface ConnectorsStore {
 
 const STORED_STATUSES = new Set(['connected', 'disconnected', 'unknown']);
 
+/**
+ * Same slug shape ConnectorService enforces on its IPC surface. Enforced on
+ * LOAD too: stored-only sites are auto-probed on refresh, so a tampered
+ * connectors.json must not be able to smuggle a flag-like key ("--profile")
+ * into the opencli argv.
+ */
+const SITE_KEY_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/i;
+
 function toStored(raw: unknown): StoredConnector | undefined {
   if (raw == null || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;
@@ -50,6 +58,7 @@ export function createConnectorsStore(opts: { userDataDir: string }): Connectors
       if (raw?.version !== 1 || raw.sites == null || typeof raw.sites !== 'object') return {};
       const out: Record<string, StoredConnector> = {};
       for (const [site, rec] of Object.entries(raw.sites as Record<string, unknown>)) {
+        if (!SITE_KEY_RE.test(site)) continue;
         const stored = toStored(rec);
         if (stored) out[site] = stored;
       }
