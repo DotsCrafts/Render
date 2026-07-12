@@ -104,7 +104,7 @@ export class TabManager {
     this.window.contentView.addChildView(view);
     view.setBounds(this.bounds());
     view.setVisible(false);
-    void view.webContents.loadURL(target);
+    view.webContents.loadURL(target).catch((err) => logLoadFailure(target, err));
 
     if (opts.activate ?? true) this.activate(id);
     else this.emit();
@@ -119,7 +119,7 @@ export class TabManager {
   openUrl(url: string): string {
     const active = this.activeId ? this.tabs.get(this.activeId) : undefined;
     if (active && BLANK_URLS.has(active.view.webContents.getURL())) {
-      void this.navigate(active.id, url);
+      this.navigate(active.id, url).catch((err) => logLoadFailure(url, err));
       this.activate(active.id);
       return active.id;
     }
@@ -348,4 +348,17 @@ const normalizeUrl = (raw: string): string => {
   // looks like a domain → https, otherwise treat as a search query
   if (/^[^\s/]+\.[^\s/]+/.test(value)) return `https://${value}`;
   return `https://duckduckgo.com/?q=${encodeURIComponent(value)}`;
+};
+
+/**
+ * loadURL rejections are expected browser noise (redirect chains abort with
+ * ERR_ABORTED, sites present bad certs) — they must never surface as an
+ * UnhandledPromiseRejectionWarning in main. ERR_ABORTED (-3) usually means the
+ * navigation was superseded by the site's own redirect, so it stays silent;
+ * anything else (e.g. ERR_CERT_COMMON_NAME_INVALID) is worth one warn line.
+ */
+const logLoadFailure = (url: string, err: unknown): void => {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/ERR_ABORTED|\(-3\)/.test(message)) return;
+  console.warn(`[tabs] load failed for ${url}: ${message}`);
 };

@@ -143,11 +143,12 @@ export interface AgentRuntimeDeps {
    */
   cdpEndpoint?: () => Promise<string>;
   /**
-   * Connector seam: when a login tab opens from a `login` card, hand the site to
-   * the ConnectorService so its whoami watch flips the connector to Connected
-   * (and notifyLogin resumes the conversation) — no "did it work?" guessing.
+   * Connector seam: a `login` card's Sign-in hands the whole journey to the
+   * ConnectorService — it opens the adapter's own login flow (or a normalized
+   * tab), runs the whoami watch, flips the connector to Connected, and resumes
+   * the conversation via notifyLogin — no "did it work?" guessing.
    */
-  connectors?: { noteLoginOpened(site: string, loginUrl?: string): void };
+  connectors?: { connect(site: string): Promise<unknown> };
   now: () => number;
   approvalPolicy?: ApprovalPolicy;
   sandboxMode?: SandboxMode;
@@ -1051,24 +1052,29 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     // allow a fresh login card if this site's session lapses again later
     loginPrompted.delete(site);
     if (result.action !== 'login_done') return;
-    // REAL login: open the site's login page in Render's OWN browser tab and let
-    // the human log in there. Because that tab and the opencli bridge's views
-    // share the `persist:render` session, the cookie the user sets is visible to
-    // the agent's opencli (routed to the `render` profile) — so a retry succeeds.
-    // We never call router.login (cookie adapter → system Chrome) and never claim
-    // "signed in": we only confirm the tab is open and ask the agent to retry.
-    //
-    // No fabricated URLs: a slug like `xhs` is not a domain, and auto-opening a
-    // guessed https://<slug>.com deep-links the user to a 404 (or worse, a
-    // squatter). Without a real loginUrl, show the navigate-yourself card.
     const url = loginUrl && /^https?:\/\//i.test(loginUrl) ? loginUrl : undefined;
-    if (url && deps.openTab) deps.openTab(url);
-    // Hand the login journey to the connector watch (whoami polling): the row
-    // flips to Connected by itself and notifyLogin resumes the conversation.
-    deps.connectors?.noteLoginOpened(site, url);
+    if (deps.connectors) {
+      // Adapter-driven: ConnectorService opens the RIGHT login page (the
+      // adapter's own `login` flow when it ships one — e.g. 12306's
+      // kyfw.12306.cn, where the failure-derived https://12306.cn hits an
+      // apex-cert error — else a www-normalized tab), runs the whoami watch,
+      // and resumes the conversation via notifyLogin on completion.
+      void deps.connectors.connect(site);
+    } else if (url && deps.openTab) {
+      // Legacy path (no connector service): open the failure-derived URL.
+      // No fabricated URLs: a slug like `xhs` is not a domain, and auto-opening
+      // a guessed https://<slug>.com deep-links a 404 (or worse, a squatter).
+      deps.openTab(url);
+    }
     deps.emit({
       kind: 'ux',
-      message: loginOpenedUx(site, url, `ux-oc-${++uxSeq}`, deps.now(), Boolean(deps.connectors)),
+      message: loginOpenedUx(
+        site,
+        deps.connectors ? undefined : url,
+        `ux-oc-${++uxSeq}`,
+        deps.now(),
+        Boolean(deps.connectors),
+      ),
     });
   };
 
@@ -1216,11 +1222,25 @@ function loginOpenedUx(
   ts: number,
   watching: boolean,
 ): UxMessage {
-  // With a connector watch running, Render detects the login itself — promise
-  // that. Without one (connectors not wired), fall back to the manual "send 继续".
-  const followUp = watching
-    ? `I'm watching for the login — the moment it lands I'll flip the ${site} connector to Connected and continue automatically.`
-    : `When you're done, send "继续" (or anything) and I'll retry with it.`;
+  // With the connector service driving (watching=true), the sign-in tab is
+  // opened by the adapter's own login flow and Render detects completion —
+  // promise that. Without it (legacy), fall back to the manual "send 继续".
+  if (watching) {
+    return {
+      id,
+      kind: 'render',
+      blocking: false,
+      ts,
+      spec: {
+        title: `Sign in to ${site} in Render`,
+        body:
+          `Opening the ${site} sign-in in a Render tab — complete it there; your session stays on this device. ` +
+          `I'm watching for the login: the moment it lands I'll flip the ${site} connector to Connected and continue automatically.`,
+        ...(url ? { items: [{ title: url, url }] } : {}),
+      },
+    };
+  }
+  const followUp = `When you're done, send "继续" (or anything) and I'll retry with it.`;
   return {
     id,
     kind: 'render',
