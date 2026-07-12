@@ -157,7 +157,7 @@ export function parseWhoami(exec: OpencliExec): WhoamiProbe {
   if (ADAPTER_DRIFT_RE.test(text)) {
     return {
       kind: 'connected',
-      detail: `session looks active — whoami verify drifted (${firstLine(text) || `exit ${exec.exitCode}`})`,
+      detail: `session looks active — whoami verify drifted (${driftLine(text) || `exit ${exec.exitCode}`})`,
     };
   }
 
@@ -182,6 +182,25 @@ function firstLine(text: string): string {
       .map((l) => l.trim())
       .find((l) => l.length > 0) ?? ''
   ).slice(0, 160);
+}
+
+/**
+ * The human-facing line of a verify-drift failure. opencli prints YAML-ish
+ * error envelopes ("ok: false" first), so prefer the `message:` line, then the
+ * COMMAND_EXEC line, then whatever comes first — "(ok: false)" tells a user
+ * nothing (seen live on the dianping journey).
+ */
+function driftLine(text: string): string {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const line =
+    lines.find((l) => /^message\s*:/i.test(l)) ??
+    lines.find((l) => /COMMAND_EXEC/i.test(l)) ??
+    lines[0] ??
+    '';
+  return line.replace(/^message\s*:\s*/i, '').slice(0, 160);
 }
 
 function hostMatchesDomain(url: string, domain?: string): boolean {

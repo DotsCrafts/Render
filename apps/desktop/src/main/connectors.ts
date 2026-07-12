@@ -195,20 +195,42 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     apply(site, { status: 'unknown', detail: probe.detail, lastChecked: deps.now() });
   };
 
-  /** One whoami probe with the transient 'checking' state; deduped per site. */
+  /**
+   * One whoami probe with the transient 'checking' state; deduped per site.
+   * A live login WATCH owns its site's badge: a probe that lands mid-journey
+   * (a queued auto-refresh, or the human hitting Check) may confirm the login
+   * early, but a not-yet verdict must NOT tear waiting-for-sign-in down to
+   * "Not connected" while the watch is still polling — journey-caught race.
+   */
   const probe = async (site: string): Promise<void> => {
     if (probing.has(site) || disposed) return;
     probing.add(site);
     const prev = states.get(site);
+    const watchOwned = prev?.status === 'connecting' && watches.has(site);
     apply(site, { ...(prev ?? { status: 'unknown' }), status: 'checking' });
     try {
-      applyProbe(site, await deps.router.whoami(site));
+      const verdict = await deps.router.whoami(site);
+      if (watchOwned && verdict.kind === 'connected') {
+        // deleting the watch claims the single onConnected — if the watch's own
+        // poll confirmed first (and deleted), this returns false: no double fire
+        const claimed = watches.delete(site);
+        applyProbe(site, verdict);
+        if (claimed) deps.onConnected?.(site, verdict.account);
+      } else if (watchOwned && watches.has(site)) {
+        apply(site, prev as SiteState); // restore waiting-for-sign-in
+      } else {
+        applyProbe(site, verdict);
+      }
     } catch (err) {
-      apply(site, {
-        status: 'unknown',
-        detail: err instanceof Error ? err.message : String(err),
-        lastChecked: deps.now(),
-      });
+      if (watchOwned && watches.has(site)) {
+        apply(site, prev as SiteState);
+      } else {
+        apply(site, {
+          status: 'unknown',
+          detail: err instanceof Error ? err.message : String(err),
+          lastChecked: deps.now(),
+        });
+      }
     } finally {
       probing.delete(site);
     }
