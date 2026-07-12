@@ -52,6 +52,20 @@ test('parseWhoami: verify-scraper drift (COMMAND_EXEC past the auth gate) is CON
   assert.match(p.detail, /verify drifted/);
 });
 
+test('parseWhoami: drift detail prefers the message line over the YAML "ok: false" envelope', () => {
+  // the exact envelope the live dianping journey produced
+  const p = parseWhoami(
+    exec(
+      1,
+      '',
+      'ok: false\nerror:\n  code: COMMAND_EXEC\n  message: Dianping member page rendered but no user_id link found — stale dper or layout drift\n  exitCode: 1',
+    ),
+  );
+  assert.equal(p.kind, 'connected');
+  assert.match(p.detail, /member page rendered/);
+  assert.doesNotMatch(p.detail, /ok: false/);
+});
+
 test('parseWhoami: an ENGINE failure is unknown — never connected (smoke-caught lie)', () => {
   // the exact OpenCLIApp drift the desktop smoke hit: every whoami failed with
   // exit 78 and this stderr, and the old drift rule painted ALL sites Connected.

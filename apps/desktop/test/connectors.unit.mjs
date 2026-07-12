@@ -220,6 +220,33 @@ test('noteLoginOpened: starts the same watch without opening another tab', async
   assert.deepEqual(connectedEvents, [{ site: 'dianping', account: 'drej' }]);
 });
 
+test('a probe landing mid-watch never tears down waiting-for-sign-in (journey-caught race)', async () => {
+  // slow watch ticks hold the watch alive while the mid-journey probe lands
+  const { service } = harness({
+    deps: { sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 40))) },
+  }); // whoami: always disconnected — the human hasn't scanned yet
+  await service.connect('zhihu');
+  const list = await service.refresh('zhihu'); // queued auto-refresh / manual Check
+  assert.equal(
+    bySite(list, 'zhihu').status,
+    'connecting',
+    'a not-yet verdict must restore the watch-owned badge, not paint Not connected',
+  );
+  service.dispose();
+});
+
+test('a probe that CONFIRMS the login mid-watch notifies exactly once', async () => {
+  const { service, connectedEvents } = harness({
+    deps: { sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 40))) },
+    router: { whoami: async () => ({ kind: 'connected', account: 'drej' }) },
+  });
+  await service.connect('zhihu');
+  await service.refresh('zhihu'); // Check lands before the watch's first poll
+  await new Promise((r) => setTimeout(r, 150)); // let any surviving watch poll run
+  assert.deepEqual(connectedEvents, [{ site: 'zhihu', account: 'drej' }]);
+  service.dispose();
+});
+
 // ── disconnect ───────────────────────────────────────────────────────────────
 
 test('disconnect: logout supported → logout runs, then a fresh probe tells the truth', async () => {
