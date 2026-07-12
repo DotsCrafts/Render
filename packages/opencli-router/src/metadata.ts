@@ -61,6 +61,16 @@ function toMeta(raw: RawCommand): CommandMeta | undefined {
   };
 }
 
+/** Per-site aggregate of the command catalog — the connectors' service list. */
+export interface SiteMeta {
+  site: string;
+  domain?: string;
+  /** total commands the adapter exposes */
+  commands: number;
+  /** commands that need a logged-in session (cookie/browser strategy) */
+  authCommands: number;
+}
+
 export class MetadataIndex {
   readonly #byKey = new Map<string, CommandMeta>();
   readonly #domainBySite = new Map<string, string>();
@@ -97,6 +107,27 @@ export class MetadataIndex {
 
   domainFor(site: string): string | undefined {
     return this.#domainBySite.get(site);
+  }
+
+  /** Aggregate the catalog per site (alphabetical) — feeds the connectors list. */
+  sites(): SiteMeta[] {
+    const bySite = new Map<string, SiteMeta>();
+    for (const meta of this.#byKey.values()) {
+      const domain = this.#domainBySite.get(meta.site);
+      const prev = bySite.get(meta.site) ?? {
+        site: meta.site,
+        ...(domain ? { domain } : {}),
+        commands: 0,
+        authCommands: 0,
+      };
+      const needsAuth = mapStrategy(meta) !== 'public';
+      bySite.set(meta.site, {
+        ...prev,
+        commands: prev.commands + 1,
+        authCommands: prev.authCommands + (needsAuth ? 1 : 0),
+      });
+    }
+    return [...bySite.values()].sort((a, b) => a.site.localeCompare(b.site));
   }
 
   get size(): number {

@@ -27,8 +27,15 @@ import type {
   SandboxSpawnOptions,
 } from '@render/protocol';
 import { buildArgv, type OpencliFormat } from './argv.js';
-import { MetadataIndex, mapStrategy } from './metadata.js';
-import { extractJson, extractLoginUrl, isAuthRequired, isBrowserUnavailable } from './parse.js';
+import { MetadataIndex, mapStrategy, type SiteMeta } from './metadata.js';
+import {
+  extractJson,
+  extractLoginUrl,
+  isAuthRequired,
+  isBrowserUnavailable,
+  parseWhoami,
+  type WhoamiProbe,
+} from './parse.js';
 import type { CommandMeta, OpencliExec, OpencliRouterDeps } from './types.js';
 
 export interface OpencliRouterHandle extends OpencliRouter {
@@ -36,6 +43,12 @@ export interface OpencliRouterHandle extends OpencliRouter {
   catalogSize(): number;
   /** the OPENCLI_CDP_ENDPOINT the browser route would use (or null) */
   browserEndpoint(): Promise<string | null>;
+  /** per-site aggregates from opencli metadata — the connectors catalog */
+  listSites(): Promise<SiteMeta[]>;
+  /** probe the site's login state via `whoami --site-session persistent` */
+  whoami(site: string): Promise<WhoamiProbe>;
+  /** best-effort `opencli <site> logout`; supported:false when the adapter has none */
+  logout(site: string): Promise<{ supported: boolean }>;
   dispose(): Promise<void>;
 }
 
@@ -56,6 +69,15 @@ const DEFAULT_FALLBACK: Record<string, AdapterStrategy> = {
 const PUBLIC_TIMEOUT_MS = 60_000;
 const BROWSER_TIMEOUT_MS = 120_000;
 const METADATA_TIMEOUT_MS = 30_000;
+const WHOAMI_TIMEOUT_MS = 45_000;
+const LOGOUT_TIMEOUT_MS = 30_000;
+
+/**
+ * MANDATORY on every login-site command (login/whoami/logout/…): the login
+ * cookie lands in the PERSISTENT site session; without the flag the command
+ * runs ephemeral and falsely reports "not logged in" (see agent-instructions).
+ */
+const SITE_SESSION_ARGS = ['--site-session', 'persistent'] as const;
 
 export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandle {
   const opencli = deps.opencliBin ?? 'opencli';
@@ -207,8 +229,10 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     }
     // `opencli <site> login` opens the site in the real tab (via the relay) and
     // waits for the human to authenticate — deliberately UNBOUNDED: a deadline
-    // here would kill the login tab under the user mid-typing.
-    const exec = await run([site, 'login', '-f', 'json'], {
+    // here would kill the login tab under the user mid-typing. The persistent
+    // site session is where the cookie must land, or every later command runs
+    // ephemeral and reports AUTH_REQUIRED despite the fresh login.
+    const exec = await run([site, 'login', ...SITE_SESSION_ARGS, '-f', 'json'], {
       env: { OPENCLI_CDP_ENDPOINT: endpoint },
     });
     const parsed = extractJson(exec.stdout);
@@ -220,6 +244,49 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     return { loggedIn, account };
   };
 
+  /** env for login-state probes: point cookie/browser adapters at Render's CDP. */
+  const probeEnv = async (): Promise<Record<string, string> | undefined> => {
+    const endpoint = await browserEndpoint();
+    return endpoint ? { OPENCLI_CDP_ENDPOINT: endpoint } : undefined;
+  };
+
+  const listSites = async (): Promise<SiteMeta[]> => {
+    await ensureMeta();
+    return meta.sites();
+  };
+
+  const whoami = async (site: string): Promise<WhoamiProbe> => {
+    try {
+      await ensureMeta();
+    } catch {
+      /* metadata unavailable — probe blindly; parseWhoami degrades to 'unknown' */
+    }
+    if (meta.loaded && !meta.get(site, 'whoami')) {
+      return { kind: 'unknown', detail: 'adapter has no whoami probe — connect to verify' };
+    }
+    const env = await probeEnv();
+    const exec = await run([site, 'whoami', ...SITE_SESSION_ARGS, '-f', 'json'], {
+      ...(env ? { env } : {}),
+      timeoutMs: WHOAMI_TIMEOUT_MS,
+    });
+    return parseWhoami(exec);
+  };
+
+  const logout = async (site: string): Promise<{ supported: boolean }> => {
+    try {
+      await ensureMeta();
+    } catch {
+      /* metadata unavailable — attempt anyway; a CLI rejection is harmless */
+    }
+    if (meta.loaded && !meta.get(site, 'logout')) return { supported: false };
+    const env = await probeEnv();
+    await run([site, 'logout', ...SITE_SESSION_ARGS, '-f', 'json'], {
+      ...(env ? { env } : {}),
+      timeoutMs: LOGOUT_TIMEOUT_MS,
+    });
+    return { supported: true };
+  };
+
   const dispose = async (): Promise<void> => {
     if (started) await deps.sandbox.dispose();
     started = false;
@@ -229,6 +296,9 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     classify,
     invoke,
     login,
+    listSites,
+    whoami,
+    logout,
     catalogSize: () => meta.size,
     browserEndpoint,
     dispose,

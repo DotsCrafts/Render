@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Render Connectors — opencli 登录态的产品设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1f27; --muted: #5b6572; --faint: #8b94a1;
+    --card: #f6f8fa; --border: #d8dee6; --brand: #4c7dff; --ok: #1a9e5c;
+    --warn: #c98a1b; --bad: #c04848; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9aa6b2; --faint: #6b7684;
+      --card: #161c24; --border: #2a3341; --brand: #6f9aff; --ok: #3fb87f;
+      --warn: #d9a441; --bad: #e06c6c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 20px 60px; background: var(--bg); color: var(--fg);
+         font: 15px/1.65 -apple-system, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 40px 0 12px; padding-top: 18px; border-top: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 22px 0 8px; }
+  p, li { color: var(--fg); }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .cardgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .card b { display: block; margin-bottom: 4px; }
+  .card span { color: var(--muted); font-size: 13.5px; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--card); }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; }
+  code { background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .flow { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow-x: auto; margin: 14px 0; }
+  .badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .b-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .b-live { color: var(--brand); background: color-mix(in srgb, var(--brand) 14%, transparent); }
+  .b-off { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+  .b-dim { color: var(--faint); background: color-mix(in srgb, var(--faint) 14%, transparent); }
+  .callout { border-left: 3px solid var(--brand); background: var(--card); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14px; }
+  .callout.warn { border-left-color: var(--warn); }
+  footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--faint); font-size: 12.5px; }
+  ul { padding-left: 22px; } li { margin: 4px 0; }
+  svg text { font-family: -apple-system, "PingFang SC", sans-serif; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Render Connectors</h1>
+  <p class="sub">把所有 opencli site adapters 的登录态做成 Manus Connector 式的产品心智：<b>站点即服务、状态即真相、登录即恢复</b>。</p>
+
+  <h2>1 · 产品心智</h2>
+  <div class="cardgrid">
+    <div class="card"><b>站点即服务</b><span>每个 opencli adapter 是一个可连接的服务卡片：图标 + 名称 + 域名 + 命令数。公共（无需登录）adapter 折叠为底部 chips，目录完整可见。</span></div>
+    <div class="card"><b>状态即真相</b><span>状态唯一来源是 <code>opencli &lt;site&gt; whoami --site-session persistent</code>。缓存只作首屏秒开的提示（userData/connectors.json），过期即惰性重探。</span></div>
+    <div class="card"><b>登录即恢复</b><span>Connect 在 Render 内打开站点登录页，whoami watch 轮询检测；登录落地那一刻卡片自动翻转为 Connected，对话若在等待则被 steer 恢复 —— 用户永远不用回答"登录好了吗"。</span></div>
+  </div>
+
+  <h3>状态语义（badge）</h3>
+  <table>
+    <tr><th>状态</th><th>含义</th><th>动作</th></tr>
+    <tr><td><span class="badge b-ok">Connected</span></td><td>whoami 验证过的活跃会话（显示账号名）</td><td>Disconnect · Check</td></tr>
+    <tr><td><span class="badge b-off">Not connected</span></td><td>exit 77 / <code>logged_in:false</code> —— 权威的"未登录"</td><td><b>Connect</b> · Check</td></tr>
+    <tr><td><span class="badge b-live">Waiting for sign-in</span></td><td>登录页已打开，watch 轮询中（≈4 分钟上限，绝不永久转圈）</td><td>Check</td></tr>
+    <tr><td><span class="badge b-live">Checking</span></td><td>whoami 探测进行中</td><td>—</td></tr>
+    <tr><td><span class="badge b-dim">Unknown</span></td><td>未探测过 / 引擎不可用 / 超时 —— 诚实的不确定，附 detail 说明</td><td>Connect · Check</td></tr>
+  </table>
+
+  <h2>2 · whoami 真值表（opencli 1.8.4 契约）</h2>
+  <table>
+    <tr><th>信号</th><th>判定</th><th>理由</th></tr>
+    <tr><td>exit 0 + <code>logged_in:true</code></td><td class="mono" style="color:var(--ok)">connected（含账号）</td><td>权威成功</td></tr>
+    <tr><td>exit 77 / <code>logged_in:false</code></td><td class="mono" style="color:var(--bad)">disconnected</td><td>auth gate 是权威的"未登录"信号</td></tr>
+    <tr><td>非零 + <code>COMMAND_EXEC</code>（校验漂移）</td><td class="mono" style="color:var(--ok)">connected + detail</td><td>auth gate 在命令体之前运行 —— 能失败在命令体里，说明会话是活的（如 dianping "member page rendered but no user_id link found"）</td></tr>
+    <tr><td>exit 69 / 124 / 127 / CLI 拒绝 / 其它引擎错误</td><td class="mono" style="color:var(--warn)">unknown + detail</td><td><b>冒烟实测修正</b>：OpenCLIApp 的 exit-78 环境漂移曾把全部站点误判为 Connected。引擎级失败绝不能变成登录verdict —— unknown 诚实且可恢复</td></tr>
+  </table>
+  <div class="callout warn">关键教训：漂移即已登录的规则必须要求 <code>COMMAND_EXEC</code> 的正向证据；默认分支是 <code>unknown</code>，不是 <code>connected</code>。宁可"不知道"，不可撒谎。</div>
+
+  <h2>3 · 状态机与登录旅程</h2>
+  <div class="flow">
+    <svg viewBox="0 0 820 210" width="820" height="210" role="img" aria-label="connector state machine">
+      <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0L7 3L0 6z" fill="var(--muted)"/></marker></defs>
+      <g font-size="12.5">
+        <rect x="20" y="80" width="110" height="38" rx="8" fill="none" stroke="var(--faint)"/><text x="75" y="103" text-anchor="middle" fill="var(--fg)">unknown / cached</text>
+        <rect x="205" y="80" width="100" height="38" rx="8" fill="none" stroke="var(--brand)"/><text x="255" y="103" text-anchor="middle" fill="var(--brand)">checking</text>
+        <rect x="380" y="20" width="120" height="38" rx="8" fill="none" stroke="var(--ok)"/><text x="440" y="43" text-anchor="middle" fill="var(--ok)">connected</text>
+        <rect x="380" y="140" width="120" height="38" rx="8" fill="none" stroke="var(--muted)"/><text x="440" y="163" text-anchor="middle" fill="var(--fg)">disconnected</text>
+        <rect x="600" y="80" width="120" height="38" rx="8" fill="none" stroke="var(--brand)"/><text x="660" y="103" text-anchor="middle" fill="var(--brand)">connecting</text>
+        <path d="M130 99 H203" stroke="var(--muted)" marker-end="url(#a)"/><text x="165" y="92" text-anchor="middle" fill="var(--muted)" font-size="11">probe</text>
+        <path d="M305 92 C330 70 350 55 378 44" stroke="var(--muted)" fill="none" marker-end="url(#a)"/>
+        <path d="M305 106 C330 128 350 143 378 154" stroke="var(--muted)" fill="none" marker-end="url(#a)"/>
+        <path d="M500 159 C550 150 590 125 620 120" stroke="var(--muted)" fill="none" marker-end="url(#a)"/><text x="590" y="150" fill="var(--muted)" font-size="11">Connect</text>
+        <path d="M655 80 C620 55 545 40 502 38" stroke="var(--ok)" fill="none" marker-end="url(#a)"/><text x="600" y="52" fill="var(--ok)" font-size="11">watch 命中 → onConnected</text>
+        <path d="M660 118 C660 175 560 178 502 172" stroke="var(--muted)" fill="none" stroke-dasharray="4 3" marker-end="url(#a)"/><text x="640" y="192" fill="var(--muted)" font-size="11">watch 耗尽 → 稳定态 + hint</text>
+      </g>
+    </svg>
+  </div>
+  <ul>
+    <li><b>watch</b>：12s × 20 次（≈4 分钟）轮询 whoami；命中 connected 即停 → 更新卡片 + 持久化 + <code>onConnected</code>；耗尽落回最后的稳定态并给出提示，绝不留下永久 spinner。</li>
+    <li><b>generation 取消语义</b>：每个 watch 持有代号，新的 connect / disconnect / dispose 令旧循环安静退场。</li>
+    <li><b>持久化边界</b>：只有 connected / disconnected / unknown 落盘；checking / connecting 是纯运行时状态。</li>
+  </ul>
+
+  <h3>任务中断 → 自动恢复（完整旅程）</h3>
+  <div class="flow mono" style="font-size:12.5px; line-height:2">
+    agent 命令 exit 77 → login 卡片（含"我会自动检测"文案）→ 用户点 Sign in<br>
+    → Render 打开登录 tab（cookie 落在 persist:render + persistent site-session）→ <code>noteLoginOpened</code> 启动 watch<br>
+    → 用户扫码/输密码（Render 永远看不到凭据）→ whoami 翻转 connected<br>
+    → <code>notifyLogin</code>：live turn 被 steer（"session is live, retry with --site-session persistent"）自动重试；无 live turn 则发一张"已连接，说继续"卡片 —— 绝不擅自开新回合
+  </div>
+
+  <h2>4 · 架构落点</h2>
+  <table>
+    <tr><th>层</th><th>文件</th><th>职责</th></tr>
+    <tr><td>契约</td><td class="mono">packages/protocol/src/connectors.ts · ipc.ts</td><td><code>ConnectorInfo/Status/Auth</code>；4 个 invoke 通道 + <code>connectorsChanged</code> emit —— 未来 thin-client 复用同一 seam</td></tr>
+    <tr><td>App hand</td><td class="mono">packages/opencli-router — parse.ts · metadata.ts · router.ts</td><td><code>parseWhoami</code> 真值表；<code>sites()</code> 目录聚合；<code>listSites / whoami / logout</code>（全部带 <code>--site-session persistent</code>、deadline 有界、经 sandbox+CDP）；修复 <code>login()</code> 缺失的 persistent 会话 flag</td></tr>
+    <tr><td>服务</td><td class="mono">apps/desktop/src/main/connectors.ts · connectors-store.ts</td><td>状态机 + watch + 节流探测（并发 2、5 分钟 staleness、单轮 ≤8 站点）+ userData 缓存</td></tr>
+    <tr><td>runtime 钩子</td><td class="mono">apps/desktop/src/main/agent-runtime.ts</td><td>login 卡片 → <code>noteLoginOpened</code>；watch 命中 → <code>notifyLogin</code>（steer live turn / feed 卡片）</td></tr>
+    <tr><td>UI</td><td class="mono">apps/desktop/src/renderer/src/components/Connectors.tsx</td><td>顶栏插头按钮 → 模态卡片墙；favicon 仅从站点第一方拉取（字母头像兜底，不经第三方泄露站点清单）；实时订阅 <code>connectorsChanged</code></td></tr>
+  </table>
+
+  <h2>5 · 验证</h2>
+  <ul>
+    <li><b>单元</b>：opencli-router 29/29（whoami 真值表、argv 契约、目录聚合、login unbounded）；ConnectorService 13/13（缓存合并、staleness 门、watch 翻转/耗尽、logout 不支持的诚实降级、快照流）。</li>
+    <li><b>e2e（真实 Electron）</b>：nav-guard 通过；connectors 冒烟脚本走通 renderer→preload→main→router 全链路 —— 点击顶栏按钮、面板挂载、缓存站点渲染、探测后 badge 更新。</li>
+    <li><b>冒烟抓到并修复的真 bug</b>：本机 OpenCLIApp 环境漂移（exit 78）曾让三张卡片全部假显 Connected —— 收紧漂移规则后诚实显示 Unknown + detail。</li>
+    <li><b>已知环境问题（另案处理）</b>：本机 OpenCLIApp 向其自带 CLI 注入已废弃的 <code>OPENCLI_DAEMON_PORT</code>，所有 opencli 调用报错 —— 影响整个 app hand，非本特性引入。</li>
+  </ul>
+
+  <footer>Render · branch <span class="mono">claude/opencli-adaptors-login-ux-4b40ed</span> · 2026-07-12 · 契约源：agent-instructions.ts 登录规范 + opencli 1.8.4 行为备忘</footer>
+</main>
+</body>
+</html>

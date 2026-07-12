@@ -27,6 +27,8 @@ import {
   type OpencliBridgeWire,
 } from './opencli-bridge-wire.js';
 import { createCodexProvider } from './codex-provider.js';
+import { createConnectorService } from './connectors.js';
+import { createConnectorsStore } from './connectors-store.js';
 import { createPagesStore } from './pages-store.js';
 import { startHomePortal, type HomePortal } from './home-portal.js';
 import { resolveUxMjs, disposeUxHost } from './ux-server.js';
@@ -138,6 +140,22 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     now: () => Date.now(),
   });
 
+  // Connectors: every opencli site adapter as a connectable service with a live
+  // login state (Manus-connector mental model). The service probes login state
+  // through the router's whoami, opens login tabs in Render, and watches for the
+  // human to finish — onConnected resumes the conversation via agent.notifyLogin
+  // (read lazily: the runtime is created below).
+  const connectors = createConnectorService({
+    router,
+    store: createConnectorsStore({ userDataDir: app.getPath('userData') }),
+    emit: (list) => broker.emitConnectors(list),
+    openTab: (url) => tabs.openUrl(url),
+    onConnected: (site, account) => {
+      void agentRef?.notifyLogin(site, account);
+    },
+    now: () => Date.now(),
+  });
+
   // Brain: codex app-server runs in a SECOND sandbox owned by the runtime.
   const agent = createAgentRuntime({
     emit: (event) => broker.emitAgent(event),
@@ -166,6 +184,11 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     // register each conversation's tab group (label/color) when it becomes active
     // so the strip can chip it even before the bridge mints its first tab.
     registerGroup: (group) => tabs.ensureGroup(group),
+    // a `login` card's opened tab also starts the connector whoami watch, so the
+    // login flips the Connectors row and resumes the conversation automatically.
+    connectors: {
+      noteLoginOpened: (site, loginUrl) => connectors.noteLoginOpened(site, loginUrl),
+    },
     // route the agent's cookie/browser opencli calls to Render's bridge profile.
     opencliProfile: bridgeProfile,
     // prefer a Render-managed CODEX_HOME (provider + creds from settings).
@@ -187,6 +210,7 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     humanHand,
     codex: codexProvider,
     pages: pagesStore,
+    connectors,
   });
 
   // Degraded-mode visibility: these failures used to be console.warn-only, so
@@ -296,6 +320,7 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
   win.on('closed', () => {
     disposed = true;
     broker.dispose();
+    connectors.dispose();
     void agent.dispose();
     void router.dispose();
     tabs.dispose();

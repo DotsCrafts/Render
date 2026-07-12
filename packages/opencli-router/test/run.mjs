@@ -9,6 +9,7 @@
 
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -16,7 +17,11 @@ const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const tsx = pathToFileURL(require.resolve('tsx')).href;
-const suite = join(__dirname, 'router.unit.mjs');
+const suites = readdirSync(__dirname)
+  .filter((f) => f.endsWith('.unit.mjs'))
+  .map((f) => join(__dirname, f));
 
-const res = spawnSync(process.execPath, ['--import', tsx, '--test', suite], { stdio: 'inherit' });
+const res = spawnSync(process.execPath, ['--import', tsx, '--test', ...suites], {
+  stdio: 'inherit',
+});
 process.exit(res.status ?? 1);

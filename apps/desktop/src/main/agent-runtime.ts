@@ -68,6 +68,13 @@ export interface AgentRuntime {
   cancel(): Promise<void>;
   resolveUx(id: string, result: UxResult): Promise<void>;
   /**
+   * A watched site login landed (ConnectorService.onConnected): steer the live
+   * turn so the agent retries the blocked command immediately, else drop a
+   * non-blocking "connected — say 继续" card into the feed. Never auto-starts
+   * a fresh turn — resuming a finished conversation stays the human's call.
+   */
+  notifyLogin(site: string, account?: string): Promise<void>;
+  /**
    * Serve a generated page through the opencli-ux kernel with the runtime's
    * full write-path wiring: spec-guard, write-confirm broker, and keep-mode
    * callback forwarding (page actions → the conversation). Used by deliverPage
@@ -135,6 +142,12 @@ export interface AgentRuntimeDeps {
    * the user's real logged-in Chromium. Lazy — the relay binds at window boot.
    */
   cdpEndpoint?: () => Promise<string>;
+  /**
+   * Connector seam: when a login tab opens from a `login` card, hand the site to
+   * the ConnectorService so its whoami watch flips the connector to Connected
+   * (and notifyLogin resumes the conversation) — no "did it work?" guessing.
+   */
+  connectors?: { noteLoginOpened(site: string, loginUrl?: string): void };
   now: () => number;
   approvalPolicy?: ApprovalPolicy;
   sandboxMode?: SandboxMode;
@@ -1050,9 +1063,45 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     // squatter). Without a real loginUrl, show the navigate-yourself card.
     const url = loginUrl && /^https?:\/\//i.test(loginUrl) ? loginUrl : undefined;
     if (url && deps.openTab) deps.openTab(url);
+    // Hand the login journey to the connector watch (whoami polling): the row
+    // flips to Connected by itself and notifyLogin resumes the conversation.
+    deps.connectors?.noteLoginOpened(site, url);
     deps.emit({
       kind: 'ux',
-      message: loginOpenedUx(site, url, `ux-oc-${++uxSeq}`, deps.now()),
+      message: loginOpenedUx(site, url, `ux-oc-${++uxSeq}`, deps.now(), Boolean(deps.connectors)),
+    });
+  };
+
+  const notifyLogin = async (site: string, account?: string): Promise<void> => {
+    // the session lapsing later may need a fresh login card for this site
+    loginPrompted.delete(site);
+    const who = account ? `${site} (account: ${account})` : site;
+    if (session?.activeTurnId) {
+      try {
+        await session.steer(
+          `[login detected] The user just completed the ${who} sign-in inside Render — ` +
+            `the session is live. Retry the blocked ${site} command now ` +
+            `(remember --site-session persistent) and continue the task.`,
+        );
+        return;
+      } catch {
+        /* the turn ended while we steered — fall through to the feed card */
+      }
+    }
+    deps.emit({
+      kind: 'ux',
+      message: {
+        id: `ux-conn-${++uxSeq}`,
+        kind: 'render',
+        blocking: false,
+        ts: deps.now(),
+        spec: {
+          title: `${site} connected${account ? ` — ${account}` : ''}`,
+          body:
+            `Your ${site} session is now active inside Render. ` +
+            `Send "继续" (or re-run the command) and I'll pick the task back up with it.`,
+        },
+      },
     });
   };
 
@@ -1126,6 +1175,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     steer,
     cancel,
     resolveUx,
+    notifyLogin,
     servePage,
     forwardPageAction,
     activeGroup,
@@ -1159,7 +1209,18 @@ export function pageActionToPrompt(title: string | undefined, payload: unknown):
   return null;
 }
 
-function loginOpenedUx(site: string, url: string | undefined, id: string, ts: number): UxMessage {
+function loginOpenedUx(
+  site: string,
+  url: string | undefined,
+  id: string,
+  ts: number,
+  watching: boolean,
+): UxMessage {
+  // With a connector watch running, Render detects the login itself — promise
+  // that. Without one (connectors not wired), fall back to the manual "send 继续".
+  const followUp = watching
+    ? `I'm watching for the login — the moment it lands I'll flip the ${site} connector to Connected and continue automatically.`
+    : `When you're done, send "继续" (or anything) and I'll retry with it.`;
   return {
     id,
     kind: 'render',
@@ -1168,12 +1229,12 @@ function loginOpenedUx(site: string, url: string | undefined, id: string, ts: nu
     spec: url
       ? {
           title: `Opened ${site} login in Render`,
-          body: `Log in on the tab I just opened — your session stays inside Render. When you're done, send "继续" (or anything) and I'll retry with it.`,
+          body: `Log in on the tab I just opened — your session stays inside Render. ${followUp}`,
           items: [{ title: url, url }],
         }
       : {
           title: `Log in to ${site} in Render`,
-          body: `I don't know this site's login URL — open ${site} in a new tab, log in there, then send "继续" and I'll retry with your session.`,
+          body: `I don't know this site's login URL — open ${site} in a new tab and log in there. ${followUp}`,
         },
   };
 }

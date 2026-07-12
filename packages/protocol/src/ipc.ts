@@ -9,6 +9,7 @@
 
 import type { UxMessage, UxResult } from './ux.js';
 import type { CodexItem } from './codex.js';
+import type { ConnectorInfo } from './connectors.js';
 
 // ── Agent runtime event stream (main → renderer) ─────────────────────────────
 
@@ -122,9 +123,17 @@ export const IPC = {
   codexLoginOAuth: 'render:codexLoginOAuth', // opens auth URL in a Render tab
   codexLogout: 'render:codexLogout',
 
+  // connectors (site login state, Manus-connector mental model) — all return the
+  // full ConnectorInfo[] snapshot; long-running transitions stream over the emit.
+  connectorsList: 'render:connectorsList',
+  connectorsRefresh: 'render:connectorsRefresh', // (site?) — probe whoami
+  connectorsConnect: 'render:connectorsConnect', // (site) — open login + watch
+  connectorsDisconnect: 'render:connectorsDisconnect', // (site) — logout + reprobe
+
   // main → renderer (emit)
   agentEvent: 'render:agentEvent', // AgentEvent
   tabsChanged: 'render:tabsChanged', // TabState[]
+  connectorsChanged: 'render:connectorsChanged', // ConnectorInfo[]
 } as const;
 
 export interface RenderApi {
@@ -157,6 +166,15 @@ export interface RenderApi {
   codexLoginApiKey(apiKey: string): Promise<CodexProviderStatus>;
   codexLoginOAuth(): Promise<CodexProviderStatus>;
   codexLogout(): Promise<CodexProviderStatus>;
+  /** The current connector snapshot (cached statuses; no probes spawned). */
+  connectorsList(): Promise<ConnectorInfo[]>;
+  /** Probe whoami for one site, or all stale login sites when omitted. */
+  connectorsRefresh(site?: string): Promise<ConnectorInfo[]>;
+  /** Open the site's login inside Render and watch whoami until it flips. */
+  connectorsConnect(site: string): Promise<ConnectorInfo[]>;
+  /** Best-effort `opencli <site> logout`, then re-probe. */
+  connectorsDisconnect(site: string): Promise<ConnectorInfo[]>;
   onAgentEvent(cb: (e: AgentEvent) => void): () => void;
   onTabsChanged(cb: (tabs: TabState[]) => void): () => void;
+  onConnectorsChanged(cb: (connectors: ConnectorInfo[]) => void): () => void;
 }
