@@ -54,11 +54,14 @@ export interface OpencliRouterHandle extends OpencliRouter {
   /** probe the site's login state via `whoami --site-session persistent` */
   whoami(site: string): Promise<WhoamiProbe>;
   /**
-   * Bulk NO-NAVIGATION login-state sweep — `opencli auth status` runs every
-   * auth adapter's quickCheck (cookie presence, zero tabs, zero page loads).
-   * This is opencli's own login-state surface (OpenCLIApp uses the same).
+   * NO-NAVIGATION login-state sweep — `opencli auth status` runs every auth
+   * adapter's quickCheck (cookie presence, zero tabs, zero page loads). This is
+   * opencli's own login-state surface (OpenCLIApp uses the same) and the
+   * AUTHORITATIVE badge signal. Pass `sites` to scope to `--site a,b`; pass
+   * `full: true` to additionally run the per-site whoami (navigates — account
+   * enrichment only, serialized so it can't stampede the browser bridge).
    */
-  authStatus(): Promise<AuthStatusRow[]>;
+  authStatus(sites?: string[], opts?: { full?: boolean }): Promise<AuthStatusRow[]>;
   /** best-effort `opencli <site> logout`; supported:false when the adapter has none */
   logout(site: string): Promise<{ supported: boolean }>;
   dispose(): Promise<void>;
@@ -112,6 +115,22 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
   const meta = new MetadataIndex();
   const classifyCache = new Map<string, AdapterStrategy>();
   let started = false;
+
+  // Browser-driving login probes (deep whoami, `auth status --full`) must NEVER
+  // run concurrently: N parallel page-navigations saturate the single browser
+  // bridge and every command times out client-side at ~30s (field-caught when
+  // the connectors panel fired connect() for 5 sites at once). Serialize them
+  // through one promise chain — quick cookie sweeps stay off this lane.
+  let browserLane: Promise<unknown> = Promise.resolve();
+  const serializeBrowser = <T>(fn: () => Promise<T>): Promise<T> => {
+    const next = browserLane.then(fn, fn);
+    // keep the chain alive but swallow this link's result/error for the tail
+    browserLane = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
 
   const ensureStarted = async (): Promise<void> => {
     if (started) return;
@@ -304,26 +323,38 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     if (meta.loaded && !meta.get(site, 'whoami')) {
       return { kind: 'unknown', detail: 'adapter has no whoami probe — connect to verify' };
     }
-    const env = await probeEnv();
-    const exec = await run([site, 'whoami', ...SITE_SESSION_ARGS, '-f', 'json'], {
-      ...(env ? { env } : {}),
-      timeoutMs: WHOAMI_TIMEOUT_MS,
+    // deep whoami navigates a page → serialize against other browser probes.
+    return serializeBrowser(async () => {
+      const env = await probeEnv();
+      const exec = await run([site, 'whoami', ...SITE_SESSION_ARGS, '-f', 'json'], {
+        ...(env ? { env } : {}),
+        timeoutMs: WHOAMI_TIMEOUT_MS,
+      });
+      return parseWhoami(exec);
     });
-    return parseWhoami(exec);
   };
 
-  const authStatus = async (): Promise<AuthStatusRow[]> => {
-    const env = await probeEnv();
-    const exec = await run(['auth', 'status', ...AUTH_STATUS_ARGS, '-f', 'json'], {
-      ...(env ? { env } : {}),
-      timeoutMs: AUTH_STATUS_TIMEOUT_MS,
-    });
-    const parsed = extractJson(exec.stdout);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((row): row is Record<string, unknown> => row != null && typeof row === 'object')
-      .map(toAuthStatusRow)
-      .filter((row): row is AuthStatusRow => row !== undefined);
+  const authStatus = async (
+    sites?: string[],
+    opts: { full?: boolean } = {},
+  ): Promise<AuthStatusRow[]> => {
+    const siteArgs = sites && sites.length ? ['--site', sites.join(',')] : [];
+    const fullArgs = opts.full ? ['--full'] : [];
+    const runSweep = async (): Promise<AuthStatusRow[]> => {
+      const env = await probeEnv();
+      const exec = await run(
+        ['auth', 'status', ...siteArgs, ...fullArgs, ...AUTH_STATUS_ARGS, '-f', 'json'],
+        { ...(env ? { env } : {}), timeoutMs: AUTH_STATUS_TIMEOUT_MS },
+      );
+      const parsed = extractJson(exec.stdout);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((row): row is Record<string, unknown> => row != null && typeof row === 'object')
+        .map(toAuthStatusRow)
+        .filter((row): row is AuthStatusRow => row !== undefined);
+    };
+    // `--full` navigates (whoami per site) → serialize; the quick sweep does not.
+    return opts.full ? serializeBrowser(runSweep) : runSweep();
   };
 
   const logout = async (site: string): Promise<{ supported: boolean }> => {
