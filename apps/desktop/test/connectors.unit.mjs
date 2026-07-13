@@ -1,8 +1,10 @@
 // ConnectorService — the Manus-connector state machine over fake router/store.
-// Pins the product guarantees:
+// Pins the product guarantees (quick-auth-status-authoritative architecture):
 //   • the page paints from cached state and NEVER probes on list();
-//   • refresh probes only STALE login sites (bounded), never public ones;
-//   • connect opens the site's login tab and the whoami watch flips the row to
+//   • ALL login-state verdicts come from `auth status` quickCheck rows —
+//     navigation-free; deep whoami never sits on a hot path (it saturated the
+//     bridge under concurrent connects) and only enriches the account label;
+//   • connect opens the site's login and the quick watch flips the row to
 //     connected BY ITSELF (with onConnected fired so the conversation resumes);
 //   • an exhausted watch lands on an honest stable state, not a stuck spinner;
 //   • disconnect without a logout command restores state with a hint;
@@ -39,10 +41,17 @@ function fakeRouter(overrides = {}) {
         const impl = overrides.whoami ?? (async () => ({ kind: 'disconnected' }));
         return impl(site, whoamiCalls.length);
       },
-      authStatus: async () => {
-        authStatusCalls.push(true);
-        const impl = overrides.authStatus ?? (async () => []);
-        return impl();
+      authStatus: async (sites, opts) => {
+        authStatusCalls.push({ sites, opts });
+        // default: every requested (or every auth) site reports signed-out —
+        // the quick-sweep analogue of the old "whoami always disconnected"
+        const impl =
+          overrides.authStatus ??
+          (async (reqSites) =>
+            (reqSites ?? SITES.filter((s) => s.authCommands > 0).map((s) => s.site)).map(
+              (site) => ({ site, status: 'not-logged-in', checked: 'quick' }),
+            ));
+        return impl(sites, opts, authStatusCalls.length);
       },
       logout: async (site) => {
         logoutCalls.push(site);
@@ -111,7 +120,7 @@ const bySite = (list, site) => list.find((c) => c.site === site);
 // ── list ─────────────────────────────────────────────────────────────────────
 
 test('list: merges catalog + cache, filters pseudo-adapters, sorts login-first, no probes', async () => {
-  const { service, whoamiCalls } = harness({
+  const { service, whoamiCalls, authStatusCalls } = harness({
     stored: { zhihu: { status: 'connected', account: 'drej', lastChecked: 5 } },
   });
   const list = await service.list();
@@ -127,6 +136,7 @@ test('list: merges catalog + cache, filters pseudo-adapters, sorts login-first, 
   assert.equal(bySite(list, 'arxiv').status, 'none');
   assert.equal(bySite(list, 'arxiv').auth, 'none');
   assert.equal(whoamiCalls.length, 0, 'list() must never spawn a probe');
+  assert.equal(authStatusCalls.length, 0, 'list() must never run a sweep either');
 });
 
 test('list: a stored site still renders when the catalog load fails (degraded boot)', async () => {
@@ -145,17 +155,64 @@ test('list: a stored site still renders when the catalog load fails (degraded bo
 
 // ── refresh ──────────────────────────────────────────────────────────────────
 
-test('refresh(site): probes, applies the verdict, persists the stable state', async () => {
-  const { service, saves } = harness({
-    router: { whoami: async () => ({ kind: 'connected', account: '小明' }) },
+test('refresh(site): scoped quick probe applies the verdict and persists the stable state', async () => {
+  const { service, saves, authStatusCalls, whoamiCalls } = harness({
+    router: {
+      authStatus: async (sites) => [
+        { site: sites?.[0] ?? 'zhihu', status: 'logged-in', identity: '小明', checked: 'quick' },
+      ],
+    },
   });
   const list = await service.refresh('zhihu');
   const z = bySite(list, 'zhihu');
   assert.equal(z.status, 'connected');
   assert.equal(z.account, '小明');
   assert.ok(z.lastChecked > 0);
+  assert.deepEqual(authStatusCalls[0].sites, ['zhihu'], 'Check must scope the sweep to the site');
+  assert.equal(whoamiCalls.length, 0, 'Check must be navigation-free');
   assert.equal(saves().zhihu.status, 'connected');
   assert.equal(saves().zhihu.account, '小明');
+});
+
+test('probe: a connected row WITHOUT identity triggers one full enrichment that fills the account', async () => {
+  const { service, authStatusCalls } = harness({
+    router: {
+      authStatus: async (sites, opts) => [
+        opts?.full
+          ? { site: 'zhihu', status: 'logged-in', identity: '深查账号', checked: 'full' }
+          : { site: 'zhihu', status: 'logged-in', checked: 'quick' },
+      ],
+    },
+  });
+  await service.refresh('zhihu');
+  await new Promise((r) => setTimeout(r, 20)); // enrichment is fire-and-forget
+  const list = await service.list();
+  assert.equal(bySite(list, 'zhihu').status, 'connected');
+  assert.equal(bySite(list, 'zhihu').account, '深查账号');
+  assert.ok(
+    authStatusCalls.some((c) => c.opts?.full === true),
+    'enrichment must request the full (whoami) row',
+  );
+});
+
+test('probe: enrichment can NEVER downgrade a connected badge (drifted whoami)', async () => {
+  const { service } = harness({
+    router: {
+      authStatus: async (sites, opts) => [
+        opts?.full
+          ? { site: 'zhihu', status: 'error', checked: 'full', error: 'TIMEOUT: whoami timed out' }
+          : { site: 'zhihu', status: 'logged-in', checked: 'quick' },
+      ],
+    },
+  });
+  await service.refresh('zhihu');
+  await new Promise((r) => setTimeout(r, 20));
+  const list = await service.list();
+  assert.equal(
+    bySite(list, 'zhihu').status,
+    'connected',
+    'a cookie-present session must survive a drifted/timed-out deep whoami',
+  );
 });
 
 test('refresh(): ONE no-navigation quick sweep — zero whoami probes, rows applied', async () => {
@@ -217,7 +274,7 @@ test('refresh(): a failed sweep leaves cached statuses standing', async () => {
 test('refresh(site): a thrown probe lands on unknown with the error, not a crash', async () => {
   const { service } = harness({
     router: {
-      whoami: async () => {
+      authStatus: async () => {
         throw new Error('sandbox exploded');
       },
     },
@@ -230,16 +287,14 @@ test('refresh(site): a thrown probe lands on unknown with the error, not a crash
 // ── connect + watch ──────────────────────────────────────────────────────────
 
 test('connect (no login command): opens a www-normalized tab, watch flips to connected + onConnected', async () => {
-  let loggedIn = false;
   const { service, opened, connectedEvents, saves } = harness({
     router: {
-      whoami: async (_site, n) => {
-        // first two watch probes: still signing in; third: landed
-        loggedIn = n >= 3;
-        return loggedIn
-          ? { kind: 'connected', account: 'drej' }
-          : { kind: 'disconnected' };
-      },
+      // first two watch sweeps: still signing in; third: landed
+      authStatus: async (_sites, _opts, n) => [
+        n >= 3
+          ? { site: 'zhihu', status: 'logged-in', identity: 'drej', checked: 'quick' }
+          : { site: 'zhihu', status: 'not-logged-in', checked: 'quick' },
+      ],
     },
   });
 
@@ -259,7 +314,7 @@ test('connect (no login command): opens a www-normalized tab, watch flips to con
 });
 
 test('connect: an exhausted watch lands on disconnected with a hint, never a stuck spinner', async () => {
-  const { service, connectedEvents } = harness(); // whoami always disconnected
+  const { service, connectedEvents } = harness(); // quick sweep: always signed-out
   await service.connect('zhihu');
   await new Promise((r) => setTimeout(r, 50));
   const after = await service.list();
@@ -330,13 +385,15 @@ test('connect (adapter login): drives router.login bounded, no tab of our own, s
   assert.deepEqual(connectedEvents, [{ site: '12306', account: '皮皮大魔王' }]);
 });
 
-test('connect (adapter login): a non-success exit defers to a decisive whoami, not login\'s exit', async () => {
+test('connect (adapter login): a non-success exit defers to a decisive quick probe, not login\'s exit', async () => {
   // agent-instructions contract: login often exits with a verify-drift error
-  // even though the cookie WAS set — whoami is the truth source.
+  // even though the cookie WAS set — the cookie-presence sweep is the truth.
   const { service, connectedEvents } = harness({
     router: {
       login: async () => ({ loggedIn: false }), // timeout / drift exit
-      whoami: async () => ({ kind: 'connected', account: 'drej' }),
+      authStatus: async (sites) => [
+        { site: sites?.[0] ?? '12306', status: 'logged-in', identity: 'drej', checked: 'quick' },
+      ],
     },
   });
   await service.connect('12306');
@@ -365,16 +422,16 @@ test('watch is bounded by WALL CLOCK, not attempt count (slow probes must not st
   // each now() call advances 30s — the 4-minute deadline exhausts in a few
   // iterations even though the attempt budget alone would allow many more
   let clock = 0;
-  const { service, whoamiCalls } = harness({
+  const { service, authStatusCalls } = harness({
     deps: { now: () => (clock += 30_000) },
-  }); // whoami: always disconnected
+  }); // quick sweep: always signed-out
   await service.connect('zhihu');
   await new Promise((r) => setTimeout(r, 50));
   const after = await service.list();
   assert.equal(bySite(after, 'zhihu').status, 'disconnected', 'watch must still exhaust honestly');
   assert.ok(
-    whoamiCalls.length < 12,
-    `wall-clock deadline must bound the watch (saw ${whoamiCalls.length} probes)`,
+    authStatusCalls.length < 12,
+    `wall-clock deadline must bound the watch (saw ${authStatusCalls.length} probes)`,
   );
 });
 
@@ -396,7 +453,11 @@ test('a probe landing mid-watch never tears down waiting-for-sign-in (journey-ca
 test('a probe that CONFIRMS the login mid-watch notifies exactly once', async () => {
   const { service, connectedEvents } = harness({
     deps: { sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 40))) },
-    router: { whoami: async () => ({ kind: 'connected', account: 'drej' }) },
+    router: {
+      authStatus: async (sites) => [
+        { site: sites?.[0] ?? 'zhihu', status: 'logged-in', identity: 'drej', checked: 'quick' },
+      ],
+    },
   });
   await service.connect('zhihu');
   await service.refresh('zhihu'); // Check lands before the watch's first poll
@@ -439,7 +500,7 @@ test('disconnect: logout supported → logout runs, then a fresh probe tells the
     stored: { zhihu: { status: 'connected', account: 'drej' } },
     router: {
       logout: async () => ({ supported: true }),
-      whoami: async () => ({ kind: 'disconnected' }),
+      // default quick sweep already reports signed-out post-logout
     },
   });
   const list = await service.disconnect('zhihu');
@@ -458,20 +519,24 @@ test('disconnect during a connect watch: never restores a transient spinner stat
 });
 
 test('disconnect: no logout command → state restored with a sign-out hint', async () => {
-  const { service, whoamiCalls } = harness({
+  const { service, whoamiCalls, authStatusCalls } = harness({
     stored: { zhihu: { status: 'connected', account: 'drej' } },
   });
   const list = await service.disconnect('zhihu');
   assert.equal(bySite(list, 'zhihu').status, 'connected', 'unsupported logout must not lie');
   assert.match(bySite(list, 'zhihu').detail, /no logout command/);
-  assert.equal(whoamiCalls.length, 0, 'nothing to verify when logout never ran');
+  assert.equal(whoamiCalls.length + authStatusCalls.length, 0, 'nothing to verify when logout never ran');
 });
 
 // ── transitions stream to the renderer ───────────────────────────────────────
 
 test('every transition emits a snapshot (checking → verdict)', async () => {
   const { service, emitted } = harness({
-    router: { whoami: async () => ({ kind: 'connected', account: 'drej' }) },
+    router: {
+      authStatus: async (sites) => [
+        { site: sites?.[0] ?? 'zhihu', status: 'logged-in', identity: 'drej', checked: 'quick' },
+      ],
+    },
   });
   await service.refresh('zhihu');
   const zhihuStates = emitted.map((list) => bySite(list, 'zhihu')?.status);
