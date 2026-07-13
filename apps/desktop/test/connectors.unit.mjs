@@ -267,6 +267,31 @@ test('connect: an exhausted watch lands on disconnected with a hint, never a stu
   assert.equal(connectedEvents.length, 0);
 });
 
+test('connect: onConnecting fires exactly when a journey starts (both paths), never for the hint', async () => {
+  const connecting = [];
+  const withHook = (over = {}) =>
+    harness({ ...over, deps: { onConnecting: (site) => connecting.push(site) } });
+
+  let resolveLogin;
+  const adapter = withHook({ router: { login: () => new Promise((r) => (resolveLogin = r)) } });
+  await adapter.service.connect('12306'); // adapter-driven journey
+  await adapter.service.connect('zhihu'); // open-tab journey
+  assert.deepEqual(connecting, ['12306', 'zhihu']);
+
+  const hint = withHook({
+    router: {
+      listSites: async () => [
+        { site: 'mystery', commands: 1, authCommands: 1, hasLogin: false, hasWhoami: false },
+      ],
+    },
+  });
+  await hint.service.connect('mystery'); // no domain → hint only, no journey
+  assert.deepEqual(connecting, ['12306', 'zhihu'], 'the hint branch must not narrate a journey');
+  resolveLogin({ loggedIn: false });
+  adapter.service.dispose();
+  hint.service.dispose();
+});
+
 test('connect: a domainless site cannot open a tab — honest hint instead', async () => {
   const { service, opened } = harness({
     router: {

@@ -68,6 +68,14 @@ export interface AgentRuntime {
   cancel(): Promise<void>;
   resolveUx(id: string, result: UxResult): Promise<void>;
   /**
+   * A login journey started (ConnectorService.onConnecting): drop the single
+   * "sign-in opening — I'm watching" card into the feed. The Connectors panel
+   * closes on Connect so the login tab is visible; this card carries the
+   * journey narrative from there. One source for BOTH entry points (panel
+   * Connect and agent login cards) so the story never duplicates.
+   */
+  notifyLoginOpened(site: string): void;
+  /**
    * A watched site login landed (ConnectorService.onConnected): steer the live
    * turn so the agent retries the blocked command immediately, else drop a
    * non-blocking "connected — say 继续" card into the feed. Never auto-starts
@@ -1058,23 +1066,26 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       // adapter's own `login` flow when it ships one — e.g. 12306's
       // kyfw.12306.cn, where the failure-derived https://12306.cn hits an
       // apex-cert error — else a www-normalized tab), runs the whoami watch,
-      // and resumes the conversation via notifyLogin on completion.
+      // and resumes the conversation via notifyLogin on completion. The feed
+      // card comes through onConnecting → notifyLoginOpened (single source),
+      // so it is NOT emitted here.
       void deps.connectors.connect(site);
-    } else if (url && deps.openTab) {
-      // Legacy path (no connector service): open the failure-derived URL.
-      // No fabricated URLs: a slug like `xhs` is not a domain, and auto-opening
-      // a guessed https://<slug>.com deep-links a 404 (or worse, a squatter).
-      deps.openTab(url);
+      return;
     }
+    // Legacy path (no connector service): open the failure-derived URL.
+    // No fabricated URLs: a slug like `xhs` is not a domain, and auto-opening
+    // a guessed https://<slug>.com deep-links a 404 (or worse, a squatter).
+    if (url && deps.openTab) deps.openTab(url);
     deps.emit({
       kind: 'ux',
-      message: loginOpenedUx(
-        site,
-        deps.connectors ? undefined : url,
-        `ux-oc-${++uxSeq}`,
-        deps.now(),
-        Boolean(deps.connectors),
-      ),
+      message: loginOpenedUx(site, url, `ux-oc-${++uxSeq}`, deps.now(), false),
+    });
+  };
+
+  const notifyLoginOpened = (site: string): void => {
+    deps.emit({
+      kind: 'ux',
+      message: loginOpenedUx(site, undefined, `ux-oc-${++uxSeq}`, deps.now(), true),
     });
   };
 
@@ -1181,6 +1192,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     steer,
     cancel,
     resolveUx,
+    notifyLoginOpened,
     notifyLogin,
     servePage,
     forwardPageAction,

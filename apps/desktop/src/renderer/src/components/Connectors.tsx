@@ -108,7 +108,7 @@ export function Connectors({ onClose }: Props): ReactElement {
           <div className="connectors-body">
             <div className="connectors-grid">
               {loginSites.map((c) => (
-                <ConnectorCard key={c.site} c={c} />
+                <ConnectorCard key={c.site} c={c} onClose={onClose} />
               ))}
             </div>
             {publicSites.length > 0 ? (
@@ -133,9 +133,21 @@ export function Connectors({ onClose }: Props): ReactElement {
   );
 }
 
-function ConnectorCard({ c }: { c: ConnectorInfo }): ReactElement {
+function ConnectorCard({ c, onClose }: { c: ConnectorInfo; onClose: () => void }): ReactElement {
   const busy = c.status === 'checking' || c.status === 'connecting';
-  const connect = (): void => void window.render.connectorsConnect(c.site).catch(() => {});
+  // The chrome (and this panel) is the BASE layer — page views composite on
+  // top, so a login tab would open BEHIND the panel. When a journey actually
+  // starts (status flips to connecting), yield: close the panel so the sign-in
+  // page is visible. The agent feed carries the journey from there, and this
+  // panel shows the fresh state on reopen. Check/Disconnect never navigate, so
+  // they keep the panel open.
+  const connect = (): void =>
+    void window.render
+      .connectorsConnect(c.site)
+      .then((list) => {
+        if (list.find((x) => x.site === c.site)?.status === 'connecting') onClose();
+      })
+      .catch(() => {});
   const check = (): void => void window.render.connectorsRefresh(c.site).catch(() => {});
   const disconnect = (): void => void window.render.connectorsDisconnect(c.site).catch(() => {});
 
@@ -172,7 +184,12 @@ function ConnectorCard({ c }: { c: ConnectorInfo }): ReactElement {
             Disconnect
           </button>
         ) : (
-          <button className="gallery-btn primary" onClick={connect} disabled={busy}>
+          <button
+            className="gallery-btn primary"
+            onClick={connect}
+            disabled={busy}
+            title="Opens the sign-in page — this panel closes so you can see it"
+          >
             {c.status === 'connecting' ? 'Waiting for sign-in…' : 'Connect'}
           </button>
         )}
