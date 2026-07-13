@@ -69,6 +69,10 @@ export interface SiteMeta {
   commands: number;
   /** commands that need a logged-in session (cookie/browser strategy) */
   authCommands: number;
+  /** the adapter ships its own `login` command (adapter-driven sign-in) */
+  hasLogin: boolean;
+  /** the adapter ships a `whoami` probe */
+  hasWhoami: boolean;
 }
 
 export class MetadataIndex {
@@ -119,12 +123,16 @@ export class MetadataIndex {
         ...(domain ? { domain } : {}),
         commands: 0,
         authCommands: 0,
+        hasLogin: false,
+        hasWhoami: false,
       };
       const needsAuth = mapStrategy(meta) !== 'public';
       bySite.set(meta.site, {
         ...prev,
         commands: prev.commands + 1,
         authCommands: prev.authCommands + (needsAuth ? 1 : 0),
+        hasLogin: prev.hasLogin || meta.name === 'login',
+        hasWhoami: prev.hasWhoami || meta.name === 'whoami',
       });
     }
     return [...bySite.values()].sort((a, b) => a.site.localeCompare(b.site));

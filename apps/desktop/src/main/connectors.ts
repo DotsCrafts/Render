@@ -27,6 +27,8 @@ export interface ConnectorRouterSlice {
   listSites(): Promise<SiteMeta[]>;
   whoami(site: string): Promise<WhoamiProbe>;
   logout(site: string): Promise<{ supported: boolean }>;
+  /** adapter-driven sign-in (`opencli <site> login`); bounded via timeoutMs */
+  login(site: string, opts?: { timeoutMs?: number }): Promise<{ loggedIn: boolean; account?: string }>;
 }
 
 export interface ConnectorServiceDeps {
@@ -52,8 +54,6 @@ export interface ConnectorService {
   connect(site: string): Promise<ConnectorInfo[]>;
   /** Best-effort `opencli <site> logout`, then re-probe the real state. */
   disconnect(site: string): Promise<ConnectorInfo[]>;
-  /** A login tab was opened outside the Connectors page — watch it the same way. */
-  noteLoginOpened(site: string, loginUrl?: string): void;
   dispose(): void;
 }
 
@@ -69,7 +69,18 @@ const STALE_MS = 5 * 60_000;
 const MAX_AUTO_PROBES = 8;
 const PROBE_CONCURRENCY = 2;
 const WATCH_INTERVAL_MS = 12_000;
-const WATCH_ATTEMPTS = 20; // ≈4 minutes of login journey headroom
+/**
+ * WALL-CLOCK bound for the whoami watch. An attempt count alone stretched the
+ * journey to ~16 minutes of "Waiting for sign-in" when each probe ran into its
+ * own 45s deadline (unreachable sites) — the badge must resolve on human time.
+ */
+const WATCH_DEADLINE_MS = 4 * 60_000;
+/**
+ * Cap for a background `opencli <site> login` journey. Expiry kills the CLI
+ * (loggedIn:false) and a decisive whoami settles the badge — an abandoned
+ * Connect must not leak a waiting CLI process forever.
+ */
+const LOGIN_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Site aliases are lowercase slugs (zhihu, 12306, goat-faucet). The IPC surface
@@ -237,15 +248,17 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
   };
 
   /**
-   * Poll whoami until the human's login lands. Generation-scoped: a newer
-   * connect() or dispose() strands this loop harmlessly.
+   * Poll whoami until the human's login lands, bounded by WALL CLOCK (slow or
+   * unreachable probes must not stretch the journey). Generation-scoped: a
+   * newer connect() or dispose() strands this loop harmlessly.
    */
-  const beginWatch = (site: string): void => {
+  const beginWatch = (site: string): number => {
     const gen = (watches.get(site) ?? 0) + 1;
     watches.set(site, gen);
+    const deadline = deps.now() + WATCH_DEADLINE_MS;
     void (async () => {
       let lastStable: WhoamiProbe = { kind: 'unknown', detail: 'login not detected yet' };
-      for (let attempt = 0; attempt < WATCH_ATTEMPTS; attempt++) {
+      while (deps.now() < deadline) {
         await sleep(WATCH_INTERVAL_MS);
         if (disposed || watches.get(site) !== gen) return;
         let result: WhoamiProbe;
@@ -275,6 +288,7 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
         lastChecked: deps.now(),
       });
     })();
+    return gen;
   };
 
   const list = async (): Promise<ConnectorInfo[]> => {
@@ -308,13 +322,74 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     return snapshot();
   };
 
+  /**
+   * Adapter-driven sign-in: `opencli <site> login` opens the adapter's OWN
+   * login page (e.g. 12306 → kyfw.12306.cn/otn/resources/login.html — the
+   * naive https://<domain> hit an apex-cert error there) and resolves when the
+   * human completes. The whoami watch runs alongside as the early-flip belt;
+   * the CLI's own resolution settles anything the watch missed. Journey-scoped
+   * by watch generation: a newer connect/disconnect strands this run.
+   */
+  const runAdapterLogin = (site: string, gen: number): void => {
+    void deps.router
+      .login(site, { timeoutMs: LOGIN_TIMEOUT_MS })
+      .then(async (res) => {
+        if (disposed || watches.get(site) !== gen) return; // superseded journey
+        if (res.loggedIn) {
+          watches.delete(site); // claim the single onConnected
+          apply(site, {
+            status: 'connected',
+            ...(res.account ? { account: res.account } : {}),
+            lastChecked: deps.now(),
+          });
+          deps.onConnected?.(site, res.account);
+          return;
+        }
+        // login exited without a clean success (timeout, closed tab, or a
+        // verify-drift exit) — whoami is the truth source, not login's exit
+        // (agent-instructions contract). End the watch and probe decisively.
+        watches.delete(site);
+        await probe(site);
+      })
+      .catch(async (err) => {
+        if (disposed || watches.get(site) !== gen) return;
+        watches.delete(site);
+        try {
+          await probe(site);
+        } catch {
+          apply(site, {
+            status: 'unknown',
+            detail: err instanceof Error ? err.message : String(err),
+            lastChecked: deps.now(),
+          });
+        }
+      });
+  };
+
+  /**
+   * Fallback login URL when the adapter has no `login` command. Bare apex
+   * domains frequently don't carry a valid cert (https://12306.cn →
+   * ERR_CERT_COMMON_NAME_INVALID) — prefix www. on two-label domains; deeper
+   * hosts (mooc2-ans.chaoxing.com) are already specific.
+   */
+  const loginTabUrl = (domain: string): string =>
+    domain.split('.').length === 2 ? `https://www.${domain}` : `https://${domain}`;
+
   const connect = async (site: string): Promise<ConnectorInfo[]> => {
     assertSite(site);
     await ensureCatalog();
-    const domain = metaFor(site)?.domain;
+    const meta = metaFor(site);
     const prev = states.get(site);
-    if (domain && deps.openTab) {
-      deps.openTab(`https://${domain}`);
+    if (meta?.hasLogin) {
+      apply(site, {
+        ...(prev?.account ? { account: prev.account } : {}),
+        status: 'connecting',
+        detail: 'sign-in page opening in a Render tab — Render detects completion automatically',
+      });
+      const gen = beginWatch(site);
+      runAdapterLogin(site, gen);
+    } else if (meta?.domain && deps.openTab) {
+      deps.openTab(loginTabUrl(meta.domain));
       apply(site, {
         ...(prev?.account ? { account: prev.account } : {}),
         status: 'connecting',
@@ -324,7 +399,7 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     } else {
       apply(site, {
         ...(prev ?? { status: 'unknown' }),
-        detail: domain
+        detail: meta?.domain
           ? 'no browser tab available to open the login page'
           : 'no domain known for this adapter — open the site, sign in, then hit Check',
       });
@@ -364,21 +439,10 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     return snapshot();
   };
 
-  const noteLoginOpened = (site: string): void => {
-    if (disposed || !SITE_RE.test(site)) return; // best-effort hook — never throws
-    const prev = states.get(site);
-    apply(site, {
-      ...(prev?.account ? { account: prev.account } : {}),
-      status: 'connecting',
-      detail: 'sign-in tab opened — Render is watching for the login',
-    });
-    beginWatch(site);
-  };
-
   const dispose = (): void => {
     disposed = true;
     watches.clear();
   };
 
-  return { list, refresh, connect, disconnect, noteLoginOpened, dispose };
+  return { list, refresh, connect, disconnect, dispose };
 }

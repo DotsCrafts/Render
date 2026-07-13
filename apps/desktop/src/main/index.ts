@@ -184,10 +184,11 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     // register each conversation's tab group (label/color) when it becomes active
     // so the strip can chip it even before the bridge mints its first tab.
     registerGroup: (group) => tabs.ensureGroup(group),
-    // a `login` card's opened tab also starts the connector whoami watch, so the
-    // login flips the Connectors row and resumes the conversation automatically.
+    // a `login` card's Sign-in hands the whole journey to the connector service
+    // (adapter-driven login page + whoami watch), which resumes the conversation
+    // via notifyLogin when the login lands.
     connectors: {
-      noteLoginOpened: (site, loginUrl) => connectors.noteLoginOpened(site, loginUrl),
+      connect: (site) => connectors.connect(site),
     },
     // route the agent's cookie/browser opencli calls to Render's bridge profile.
     opencliProfile: bridgeProfile,

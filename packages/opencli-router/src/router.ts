@@ -222,18 +222,25 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     return toResult(exec, strategy, 'cdp-human-hand', format);
   };
 
-  const login = async (site: string): Promise<{ loggedIn: boolean; account?: string }> => {
+  const login = async (
+    site: string,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<{ loggedIn: boolean; account?: string }> => {
     const endpoint = await browserEndpoint();
     if (!endpoint) {
       throw new Error('login: no CDP endpoint (human-hand required to drive the login tab)');
     }
     // `opencli <site> login` opens the site in the real tab (via the relay) and
-    // waits for the human to authenticate — deliberately UNBOUNDED: a deadline
-    // here would kill the login tab under the user mid-typing. The persistent
-    // site session is where the cookie must land, or every later command runs
+    // waits for the human to authenticate — UNBOUNDED by default: a deadline
+    // would kill the login tab under the user mid-typing. Callers running the
+    // journey in the BACKGROUND (the connectors service) pass timeoutMs so an
+    // abandoned login can't leak a CLI process forever; expiry resolves
+    // loggedIn:false and the caller re-verifies by whoami. The persistent site
+    // session is where the cookie must land, or every later command runs
     // ephemeral and reports AUTH_REQUIRED despite the fresh login.
     const exec = await run([site, 'login', ...SITE_SESSION_ARGS, '-f', 'json'], {
       env: { OPENCLI_CDP_ENDPOINT: endpoint },
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
     });
     const parsed = extractJson(exec.stdout);
     const row = Array.isArray(parsed) ? parsed[0] : parsed;

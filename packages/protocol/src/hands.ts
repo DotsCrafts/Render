@@ -86,8 +86,12 @@ export interface OpencliResult {
 export interface OpencliRouter {
   classify(site: string, command: string): Promise<AdapterStrategy>;
   invoke(inv: OpencliInvocation): Promise<OpencliResult>;
-  /** drive `opencli <site> login` over the human-hand; resolves when logged in */
-  login(site: string): Promise<{ loggedIn: boolean; account?: string }>;
+  /**
+   * Drive `opencli <site> login` over the human-hand; resolves when logged in.
+   * Unbounded by default (a human is typing); pass `timeoutMs` to cap a
+   * background login journey — expiry kills the CLI and resolves loggedIn:false.
+   */
+  login(site: string, opts?: { timeoutMs?: number }): Promise<{ loggedIn: boolean; account?: string }>;
 }
 
 // ── Human hand (chromium CDP) ────────────────────────────────────────────────

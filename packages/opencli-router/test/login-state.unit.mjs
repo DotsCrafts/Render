@@ -119,13 +119,13 @@ const META_ROWS = [
   { command: 'ux/render', site: 'ux', name: 'render', strategy: 'local', browser: false, access: 'read', args: [] },
 ];
 
-test('sites(): aggregates command + auth counts per site, alphabetical, with domains', async () => {
+test('sites(): aggregates counts + login/whoami capability per site, alphabetical', async () => {
   const index = new MetadataIndex();
   await index.load(async () => exec(0, JSON.stringify(META_ROWS)));
   assert.deepEqual(index.sites(), [
-    { site: 'arxiv', domain: 'arxiv.org', commands: 1, authCommands: 0 },
-    { site: 'ux', commands: 1, authCommands: 0 },
-    { site: 'zhihu', domain: 'zhihu.com', commands: 3, authCommands: 2 },
+    { site: 'arxiv', domain: 'arxiv.org', commands: 1, authCommands: 0, hasLogin: false, hasWhoami: false },
+    { site: 'ux', commands: 1, authCommands: 0, hasLogin: false, hasWhoami: false },
+    { site: 'zhihu', domain: 'zhihu.com', commands: 3, authCommands: 2, hasLogin: false, hasWhoami: true },
   ]);
 });
 
@@ -200,7 +200,20 @@ test('login: carries --site-session persistent (cookie must land in the persiste
   assert.deepEqual(res, { loggedIn: true, account: 'drej' });
   const call = sb.calls.find((c) => c.args[1] === 'login');
   assert.deepEqual(call.args, ['zhihu', 'login', '--site-session', 'persistent', '-f', 'json']);
-  assert.equal(call.opts.timeoutMs, undefined, 'login must stay unbounded');
+  assert.equal(call.opts.timeoutMs, undefined, 'login must stay unbounded by default');
+});
+
+test('login: an explicit timeoutMs bounds a background journey (connectors connect)', async () => {
+  const sb = fakeSandbox((args) =>
+    args[0] === 'list' ? listOk() : exec(0, '[{"logged_in":true}]'),
+  );
+  const router = createOpencliRouter({
+    sandbox: sb.provider,
+    humanHand: { cdpEndpoint: async () => 'ws://127.0.0.1:9333' },
+  });
+  await router.login('zhihu', { timeoutMs: 300_000 });
+  const call = sb.calls.find((c) => c.args[1] === 'login');
+  assert.equal(call.opts.timeoutMs, 300_000);
 });
 
 test('logout: gated on the adapter having a logout command', async () => {
@@ -233,5 +246,12 @@ test('listSites: surfaces the aggregated catalog through the router', async () =
     sites.map((s) => s.site),
     ['arxiv', 'ux', 'zhihu'],
   );
-  assert.deepEqual(sites[2], { site: 'zhihu', domain: 'zhihu.com', commands: 3, authCommands: 2 });
+  assert.deepEqual(sites[2], {
+    site: 'zhihu',
+    domain: 'zhihu.com',
+    commands: 3,
+    authCommands: 2,
+    hasLogin: false,
+    hasWhoami: true,
+  });
 });
