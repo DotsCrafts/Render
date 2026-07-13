@@ -150,6 +150,11 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     store: createConnectorsStore({ userDataDir: app.getPath('userData') }),
     emit: (list) => broker.emitConnectors(list),
     openTab: (url) => tabs.openUrl(url),
+    // journey narration lives in the agent feed (the panel closes on Connect):
+    // one "sign-in opening — watching" card per journey, then the landed card.
+    onConnecting: (site) => {
+      agentRef?.notifyLoginOpened(site);
+    },
     onConnected: (site, account) => {
       void agentRef?.notifyLogin(site, account);
     },

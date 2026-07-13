@@ -40,6 +40,12 @@ export interface ConnectorServiceDeps {
   emit: (connectors: ConnectorInfo[]) => void;
   /** open the site's login page in a real Render tab (tabs.openUrl) */
   openTab?: (url: string) => string | void;
+  /**
+   * A login journey actually started (a sign-in surface is opening). The host
+   * narrates it in the agent feed — the Connectors panel closes on Connect so
+   * the login tab is visible, and the feed carries the journey from there.
+   */
+  onConnecting?: (site: string) => void;
   /** a watched login landed — let the conversation resume (agent.notifyLogin) */
   onConnected?: (site: string, account?: string) => void;
   now: () => number;
@@ -415,6 +421,7 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
       });
       const gen = beginWatch(site);
       runAdapterLogin(site, gen);
+      deps.onConnecting?.(site);
     } else if (meta?.domain && deps.openTab) {
       deps.openTab(loginTabUrl(meta.domain));
       apply(site, {
@@ -423,6 +430,7 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
         detail: 'complete the sign-in in the opened tab — Render is watching for it',
       });
       beginWatch(site);
+      deps.onConnecting?.(site);
     } else {
       apply(site, {
         ...(prev ?? { status: 'unknown' }),
