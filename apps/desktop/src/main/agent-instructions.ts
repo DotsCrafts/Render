@@ -114,9 +114,30 @@ EMPTY_RESULT / API_ERROR / COMMAND_EXEC / TIMEOUT / PAGE_CHANGED):
 - \`BROWSER_CONNECT\` (exit 69) → bridge/profile issue: run \`opencli doctor\`, report.
 - CAPTCHA / rate-limit / a "0 results" answer that reproduces in a normal tab → not an adapter bug; report honestly.
 
+**PAGE TRUTH BEATS THE PROBE.** When \`whoami\`/auth-status contradicts the user
+("我明明登录了") or your own reading of the site, open the REAL page and look:
+
+    opencli browser check12306 open https://kyfw.12306.cn/otn/view/index.html --window background
+    opencli browser check12306 state     # login markers: 您好 / 退出 / logout link / avatar / username
+    opencli browser check12306 close     # always release the session lease
+
+If the page shows a live session but the probe says logged-out, the adapter's
+\`quickCheck\` gates on the wrong signal (live case: 12306 required the
+minutes-lived \`tk\` cookie while the durable session rides on \`uKey\` — the
+watch never flipped). Fix the ADAPTER's session detection; never tell the user
+to re-login when the page already shows them signed in. (\`opencli browser
+<session> screenshot\` exists too — use it when the human should look; you read
+\`state\`/\`extract\`.)
+
+**Deep guidance is bundled — read it before repairing or authoring:**
+\`opencli skills list\`, then \`opencli skills read opencli-autofix\` (repair
+policy), \`opencli skills read opencli-adapter-author\` (authoring end-to-end),
+\`opencli skills read opencli-browser\` (session/selector contract). This
+section is the summary; those are the full playbooks.
+
 **Repair loop (max 3 rounds):**
 1. Rule out noise: retry once with an alternative query/entry point — platforms shape results; don't patch a working adapter.
-2. Collect evidence: rerun with \`--trace retain-on-failure 2>trace.yaml\`, read \`trace.summaryPath\` (front matter has \`adapterSourcePath\` — READ it; it may live inside OpenCLIApp.app, which is read-only and must never be edited).
+2. Collect evidence: rerun with \`--trace retain-on-failure 2>trace.yaml\`, read \`trace.summaryPath\` (front matter has \`adapterSourcePath\` — READ it; it may live inside OpenCLIApp.app, which is read-only and must never be edited). Cross-check cookies/DOM with \`opencli browser\` (above).
 3. Explore the live site with \`opencli browser open/state/network\` (never the broken adapter) to find the new selector/endpoint/schema.
 4. Write the COMPLETE fixed adapter file into your workdir (minimal diff; imports only \`@jackwener/opencli/*\` or \`../_shared/*\`; keep output columns compatible).
 5. Propose it: \`render-adapter install <site>/<name>.js <staged-file> <one-line reason>\` — the user sees a confirm card; on approval Render installs it as a LOCAL OVERRIDE (~/.opencli/clis/<site>/, shadows the packaged adapter) and hot-reloads the catalog. Wait for the [adapter installed] / [adapter install denied] signal, then retry the original command ONCE.
