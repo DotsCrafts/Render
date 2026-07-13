@@ -57,6 +57,7 @@ export class TabManager {
   private activeId: string | null = null;
   private panelOpen = true;
   private panelWidth: number = CHROME.panelWidth;
+  private inputOpen = true;
   private contentHidden = false;
   private seq = 0;
 
@@ -202,6 +203,21 @@ export class TabManager {
     this.relayout();
   }
 
+  /**
+   * Summon/dismiss the floating input layer — pages re-inset to the full input
+   * band while it's up, and reclaim all but the slim recall handle when hidden.
+   */
+  setInputOpen(open: boolean): void {
+    this.inputOpen = open;
+    this.relayout();
+  }
+
+  /** Main's copy of the input-layer state — replayed through getState so a
+   *  renderer reload restores a dismissed input instead of re-summoning it. */
+  get inputBandOpen(): boolean {
+    return this.inputOpen;
+  }
+
   /** Resize the agent panel — re-insets the page views to match (clamped). */
   setPanelWidth(width: number): void {
     this.panelWidth = clampPanelWidth(width);
@@ -252,7 +268,7 @@ export class TabManager {
 
   private bounds(): Bounds {
     const [w, h] = this.window.getContentSize();
-    return contentBounds(w, h, this.panelOpen, this.panelWidth);
+    return contentBounds(w, h, this.panelOpen, this.panelWidth, this.inputOpen);
   }
 
   /** A tab is live only while its webContents exists and isn't destroyed. */

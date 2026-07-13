@@ -13,7 +13,8 @@ export const CHROME = {
   panelWidth: 460, // right-side agent panel — DEFAULT; user-resizable at runtime
   panelMin: 300,
   panelMax: 820,
-  bottomBand: 76, // floating input band (never covered by a page)
+  bottomBand: 76, // floating input band while the input layer is summoned
+  handleBand: 14, // slim recall strip (home-indicator handle) while it's dismissed
 } as const;
 
 export function clampPanelWidth(w: number): number {
@@ -28,18 +29,25 @@ export interface Bounds {
   height: number;
 }
 
-/** The rect a web page occupies inside the content area, given window size. */
+/**
+ * The rect a web page occupies inside the content area, given window size.
+ * The bottom inset follows the floating input layer: the full band while it is
+ * summoned, a slim recall-handle strip while dismissed (pages get the space
+ * back, but the handle is never covered — it is the mouse path to re-summon).
+ */
 export function contentBounds(
   winWidth: number,
   winHeight: number,
   panelOpen: boolean,
   panelWidth: number = CHROME.panelWidth,
+  inputOpen: boolean = true,
 ): Bounds {
   const right = panelOpen ? panelWidth : 0;
+  const bottom = inputOpen ? CHROME.bottomBand : CHROME.handleBand;
   return {
     x: 0,
     y: CHROME.topBar,
     width: Math.max(0, winWidth - right),
-    height: Math.max(0, winHeight - CHROME.topBar - CHROME.bottomBand),
+    height: Math.max(0, winHeight - CHROME.topBar - bottom),
   };
 }

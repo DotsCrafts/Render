@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useSpeechInput } from '../useSpeechInput.js';
 
 interface Props {
   busy: boolean;
@@ -10,6 +11,8 @@ interface Props {
    */
   onSteer?: (text: string) => void;
   onCancel: () => void;
+  /** Esc — dismiss the input layer (the band collapses to the recall handle). */
+  onDismiss?: () => void;
   /**
    * Delta 2: a seed prefill pushed from a result card's Refine/Ask-follow-up
    * action. The `nonce` makes repeated seeds (even the same text) re-apply and
@@ -25,19 +28,26 @@ interface Props {
 }
 
 /**
- * The always-visible primary control, pinned bottom-center. Focused on mount and
- * re-focused after each submit so the user can keep talking to the agent.
+ * The primary intent control of the summonable input layer, pinned
+ * bottom-center. Focused on mount and re-focused after each submit so the user
+ * can keep talking to the agent; it stays mounted while the layer is dismissed
+ * so a draft survives hide/summon round-trips. Voice input appends final
+ * transcripts to the draft (send stays an explicit action).
  */
 export function FloatingInput({
   busy,
   onSubmit,
   onSteer,
   onCancel,
+  onDismiss,
   seed,
   focusNonce,
 }: Props): ReactElement {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const speech = useSpeechInput((spoken) =>
+    setText((prev) => (prev.trim() ? `${prev.trimEnd()} ${spoken}` : spoken)),
+  );
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -94,11 +104,46 @@ export function FloatingInput({
       <input
         ref={inputRef}
         value={text}
-        placeholder={steering ? 'Steer the running agent…' : 'Ask Render to do something…'}
+        placeholder={
+          speech.status === 'listening'
+            ? 'Listening…'
+            : steering
+              ? 'Steer the running agent…'
+              : 'Ask Render to do something…'
+        }
         onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && onDismiss) {
+            e.preventDefault();
+            if (speech.status === 'listening') speech.toggle();
+            onDismiss();
+          }
+        }}
       />
       {!busy && !text.trim() ? <span className="kbd">⌘ K</span> : null}
       {steering && text.trim() ? <span className="kbd">steer ↵</span> : null}
+      {speech.supported ? (
+        <button
+          type="button"
+          className={`mic${speech.status === 'listening' ? ' listening' : ''}`}
+          onClick={speech.toggle}
+          disabled={speech.status === 'unavailable'}
+          aria-label="voice input"
+          aria-pressed={speech.status === 'listening'}
+          title={
+            speech.status === 'unavailable'
+              ? 'Voice input is not available in this build'
+              : speech.status === 'listening'
+                ? 'Stop listening'
+                : 'Voice input'
+          }
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden>
+            <rect x="5.6" y="1.8" width="4.8" height="7.6" rx="2.4" />
+            <path d="M3.2 7.6a4.8 4.8 0 009.6 0M8 12.4v2" />
+          </svg>
+        </button>
+      ) : null}
       {busy ? (
         <button type="button" className="cancel" onClick={onCancel} aria-label="stop" title="Stop">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden>
