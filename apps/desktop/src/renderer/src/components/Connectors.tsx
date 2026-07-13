@@ -26,23 +26,16 @@ export function Connectors({ onClose }: Props): ReactElement {
     const off = window.render.onConnectorsChanged((list) => {
       if (live) setConnectors(list);
     });
-    // paint from cache instantly, then probe whatever's stale
+    // CACHE ONLY on open — no probes, no navigation, no tabs. Fresh state is
+    // always user-initiated: Refresh (bulk quick check), Check (deep probe),
+    // or Connect (the adapter's own login flow).
     window.render
       .connectorsList()
       .then((list) => {
-        if (!live) return undefined;
-        setConnectors(list);
-        setRefreshing(true);
-        return window.render.connectorsRefresh();
-      })
-      .then((list) => {
-        if (live && list) setConnectors(list);
+        if (live) setConnectors(list);
       })
       .catch((err: unknown) => {
         if (live) setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (live) setRefreshing(false);
       });
     return () => {
       live = false;
@@ -89,7 +82,7 @@ export function Connectors({ onClose }: Props): ReactElement {
               className="gallery-btn"
               onClick={refreshAll}
               disabled={refreshing}
-              title="Re-probe login sites not checked in the last few minutes"
+              title="Quick check every login site's session cookie — no page loads, no tabs"
             >
               {refreshing ? 'Checking…' : 'Refresh'}
             </button>

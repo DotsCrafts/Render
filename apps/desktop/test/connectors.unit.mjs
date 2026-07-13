@@ -25,16 +25,23 @@ function fakeRouter(overrides = {}) {
   const whoamiCalls = [];
   const logoutCalls = [];
   const loginCalls = [];
+  const authStatusCalls = [];
   return {
     whoamiCalls,
     logoutCalls,
     loginCalls,
+    authStatusCalls,
     router: {
       listSites: overrides.listSites ?? (async () => SITES),
       whoami: async (site) => {
         whoamiCalls.push(site);
         const impl = overrides.whoami ?? (async () => ({ kind: 'disconnected' }));
         return impl(site, whoamiCalls.length);
+      },
+      authStatus: async () => {
+        authStatusCalls.push(true);
+        const impl = overrides.authStatus ?? (async () => []);
+        return impl();
       },
       logout: async (site) => {
         logoutCalls.push(site);
@@ -64,7 +71,9 @@ function memoryStore(initial = {}) {
 }
 
 function harness(overrides = {}) {
-  const { router, whoamiCalls, logoutCalls, loginCalls } = fakeRouter(overrides.router ?? {});
+  const { router, whoamiCalls, logoutCalls, loginCalls, authStatusCalls } = fakeRouter(
+    overrides.router ?? {},
+  );
   const { store, saves } = memoryStore(overrides.stored ?? {});
   const emitted = [];
   const opened = [];
@@ -83,7 +92,17 @@ function harness(overrides = {}) {
     sleep: async () => {}, // instant watch ticks
     ...(overrides.deps ?? {}),
   });
-  return { service, whoamiCalls, logoutCalls, loginCalls, emitted, opened, connectedEvents, saves };
+  return {
+    service,
+    whoamiCalls,
+    logoutCalls,
+    loginCalls,
+    authStatusCalls,
+    emitted,
+    opened,
+    connectedEvents,
+    saves,
+  };
 }
 
 const bySite = (list, site) => list.find((c) => c.site === site);
@@ -138,18 +157,60 @@ test('refresh(site): probes, applies the verdict, persists the stable state', as
   assert.equal(saves().zhihu.account, '小明');
 });
 
-test('refresh(): probes only stale LOGIN sites — public adapters are never probed', async () => {
-  const { service, whoamiCalls } = harness();
-  await service.refresh();
-  assert.deepEqual([...whoamiCalls].sort(), ['12306', 'dianping', 'zhihu']);
+test('refresh(): ONE no-navigation quick sweep — zero whoami probes, rows applied', async () => {
+  const { service, whoamiCalls, authStatusCalls, saves } = harness({
+    router: {
+      authStatus: async () => [
+        { site: 'zhihu', status: 'logged-in', identity: '知乎用户', checked: 'quick' },
+        { site: 'dianping', status: 'not-logged-in', checked: 'quick' },
+        { site: '12306', status: 'error', checked: 'quick', error: 'BROWSER_CONNECT: profile not connected' },
+        { site: 'github', status: 'logged-in', checked: 'quick' }, // outside this page's catalog
+      ],
+    },
+  });
+  const list = await service.refresh();
+  assert.equal(authStatusCalls.length, 1);
+  assert.equal(whoamiCalls.length, 0, 'the bulk sweep must never run per-site whoami (it navigates)');
+  assert.equal(bySite(list, 'zhihu').status, 'connected');
+  assert.equal(bySite(list, 'zhihu').account, '知乎用户');
+  assert.match(bySite(list, 'zhihu').detail, /quick check/);
+  assert.equal(bySite(list, 'dianping').status, 'disconnected');
+  assert.equal(bySite(list, '12306').status, 'unknown');
+  assert.match(bySite(list, '12306').detail, /BROWSER_CONNECT/);
+  assert.equal(bySite(list, 'github'), undefined, 'untracked adapters are ignored');
+  assert.equal(saves().zhihu.status, 'connected');
 });
 
-test('refresh(): a freshly-checked site is skipped (staleness gate)', async () => {
-  const { service, whoamiCalls } = harness();
-  await service.refresh('zhihu');
-  const before = whoamiCalls.length;
-  await service.refresh(); // zhihu just checked → only the others are stale
-  assert.deepEqual(whoamiCalls.slice(before).sort(), ['12306', 'dianping']);
+test('refresh(): the sweep never tears down a live login watch', async () => {
+  let resolveLogin;
+  const { service } = harness({
+    router: {
+      login: () => new Promise((r) => (resolveLogin = r)),
+      authStatus: async () => [{ site: '12306', status: 'not-logged-in', checked: 'quick' }],
+    },
+  });
+  await service.connect('12306'); // connecting + watch + adapter login in flight
+  const list = await service.refresh();
+  assert.equal(
+    bySite(list, '12306').status,
+    'connecting',
+    'a quick not-logged-in row must not repaint a watch-owned badge',
+  );
+  resolveLogin({ loggedIn: false });
+  service.dispose();
+});
+
+test('refresh(): a failed sweep leaves cached statuses standing', async () => {
+  const { service } = harness({
+    stored: { zhihu: { status: 'connected', account: 'drej', lastChecked: 5 } },
+    router: {
+      authStatus: async () => {
+        throw new Error('engine down');
+      },
+    },
+  });
+  const list = await service.refresh();
+  assert.equal(bySite(list, 'zhihu').status, 'connected', 'cache must survive a dead engine');
 });
 
 test('refresh(site): a thrown probe lands on unknown with the error, not a crash', async () => {

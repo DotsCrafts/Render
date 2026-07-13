@@ -238,6 +238,38 @@ test('logout: gated on the adapter having a logout command', async () => {
   );
 });
 
+test('authStatus: bulk quick sweep is bounded, throttled, and parses rows defensively', async () => {
+  // live 1.8.5 shape: snake_case statuses, empty-string identity/error fields
+  const rows = [
+    { site: 'zhihu', status: 'logged_in', logged_in: true, identity: '知乎用户', checked: 'quick', error: '' },
+    { site: 'dianping', status: 'not_logged_in', logged_in: false, identity: '', checked: 'quick', error: '' },
+    { site: '12306', status: 'error', checked: 'quick', error: 'BROWSER_CONNECT: profile not connected' },
+    { status: 'logged_in' }, // no site → dropped
+    { site: 'weird', status: 'martian' }, // unrecognized status → unknown
+  ];
+  const sb = fakeSandbox((args) =>
+    args[0] === 'list' ? listOk() : exec(0, JSON.stringify(rows)),
+  );
+  const router = createOpencliRouter({
+    sandbox: sb.provider,
+    humanHand: { cdpEndpoint: async () => 'ws://127.0.0.1:9333' },
+  });
+
+  const out = await router.authStatus();
+  assert.deepEqual(out, [
+    { site: 'zhihu', status: 'logged-in', identity: '知乎用户', checked: 'quick' },
+    { site: 'dianping', status: 'not-logged-in', checked: 'quick' },
+    { site: '12306', status: 'error', checked: 'quick', error: 'BROWSER_CONNECT: profile not connected' },
+    { site: 'weird', status: 'unknown' },
+  ]);
+
+  const call = sb.calls.find((c) => c.args[0] === 'auth');
+  assert.deepEqual(call.args.slice(0, 2), ['auth', 'status']);
+  assert.ok(call.args.includes('--timeout'), 'per-site timeout must cap a dead-bridge sweep');
+  assert.ok(call.args.includes('--concurrency'));
+  assert.equal(typeof call.opts.timeoutMs, 'number', 'the sweep itself must be deadline-bounded');
+});
+
 test('listSites: surfaces the aggregated catalog through the router', async () => {
   const sb = fakeSandbox((args) => (args[0] === 'list' ? listOk() : exec(0, '[]')));
   const router = createOpencliRouter({ sandbox: sb.provider });
