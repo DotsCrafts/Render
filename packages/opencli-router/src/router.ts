@@ -47,9 +47,26 @@ export interface OpencliRouterHandle extends OpencliRouter {
   listSites(): Promise<SiteMeta[]>;
   /** probe the site's login state via `whoami --site-session persistent` */
   whoami(site: string): Promise<WhoamiProbe>;
+  /**
+   * Bulk NO-NAVIGATION login-state sweep — `opencli auth status` runs every
+   * auth adapter's quickCheck (cookie presence, zero tabs, zero page loads).
+   * This is opencli's own login-state surface (OpenCLIApp uses the same).
+   */
+  authStatus(): Promise<AuthStatusRow[]>;
   /** best-effort `opencli <site> logout`; supported:false when the adapter has none */
   logout(site: string): Promise<{ supported: boolean }>;
   dispose(): Promise<void>;
+}
+
+/** One row of `opencli auth status -f json`. */
+export interface AuthStatusRow {
+  site: string;
+  status: 'logged-in' | 'not-logged-in' | 'unknown' | 'error';
+  /** identity label when logged in (adapter-defined, e.g. user_name) */
+  identity?: string;
+  /** which probe ran: 'quick' (cookie presence) or 'full' (whoami) */
+  checked?: string;
+  error?: string;
 }
 
 const DEFAULT_FALLBACK: Record<string, AdapterStrategy> = {
@@ -71,6 +88,10 @@ const BROWSER_TIMEOUT_MS = 120_000;
 const METADATA_TIMEOUT_MS = 30_000;
 const WHOAMI_TIMEOUT_MS = 45_000;
 const LOGOUT_TIMEOUT_MS = 30_000;
+const AUTH_STATUS_TIMEOUT_MS = 120_000;
+// keep the bulk sweep snappy even when the bridge is down: per-site quick
+// checks time out at 5s and run 12 wide (~40s worst case for ~90 auth sites)
+const AUTH_STATUS_ARGS = ['--timeout', '5', '--concurrency', '12'] as const;
 
 /**
  * MANDATORY on every login-site command (login/whoami/logout/…): the login
@@ -279,6 +300,20 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     return parseWhoami(exec);
   };
 
+  const authStatus = async (): Promise<AuthStatusRow[]> => {
+    const env = await probeEnv();
+    const exec = await run(['auth', 'status', ...AUTH_STATUS_ARGS, '-f', 'json'], {
+      ...(env ? { env } : {}),
+      timeoutMs: AUTH_STATUS_TIMEOUT_MS,
+    });
+    const parsed = extractJson(exec.stdout);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((row): row is Record<string, unknown> => row != null && typeof row === 'object')
+      .map(toAuthStatusRow)
+      .filter((row): row is AuthStatusRow => row !== undefined);
+  };
+
   const logout = async (site: string): Promise<{ supported: boolean }> => {
     try {
       await ensureMeta();
@@ -305,10 +340,29 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     login,
     listSites,
     whoami,
+    authStatus,
     logout,
     catalogSize: () => meta.size,
     browserEndpoint,
     dispose,
+  };
+}
+
+const AUTH_STATUSES = new Set(['logged-in', 'not-logged-in', 'unknown', 'error']);
+
+function toAuthStatusRow(raw: Record<string, unknown>): AuthStatusRow | undefined {
+  if (typeof raw.site !== 'string' || !raw.site) return undefined;
+  // live 1.8.5 emits snake_case row statuses (logged_in / not_logged_in) while
+  // the --only flag documents kebab-case — normalize so both parse.
+  const normalized = typeof raw.status === 'string' ? raw.status.replace(/_/g, '-') : '';
+  const status = AUTH_STATUSES.has(normalized) ? (normalized as AuthStatusRow['status']) : 'unknown';
+  const identity = typeof raw.identity === 'string' && raw.identity.trim() ? raw.identity.trim() : undefined;
+  return {
+    site: raw.site,
+    status,
+    ...(identity ? { identity } : {}),
+    ...(typeof raw.checked === 'string' ? { checked: raw.checked } : {}),
+    ...(typeof raw.error === 'string' && raw.error ? { error: raw.error } : {}),
   };
 }
 

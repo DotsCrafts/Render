@@ -7,7 +7,7 @@
  */
 
 export { createOpencliRouter } from './router.js';
-export type { OpencliRouterHandle } from './router.js';
+export type { OpencliRouterHandle, AuthStatusRow } from './router.js';
 export { MetadataIndex, mapStrategy } from './metadata.js';
 export type { SiteMeta } from './metadata.js';
 export {

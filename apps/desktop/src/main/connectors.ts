@@ -19,13 +19,15 @@
  */
 
 import type { ConnectorInfo, ConnectorStatus } from '@render/protocol';
-import type { SiteMeta, WhoamiProbe } from '@render/opencli-router';
+import type { AuthStatusRow, SiteMeta, WhoamiProbe } from '@render/opencli-router';
 import type { ConnectorsStore, StoredConnector } from './connectors-store.js';
 
 /** The slice of the opencli router the service drives (test seam). */
 export interface ConnectorRouterSlice {
   listSites(): Promise<SiteMeta[]>;
   whoami(site: string): Promise<WhoamiProbe>;
+  /** bulk NO-NAVIGATION quickCheck sweep (`opencli auth status`) — zero tabs */
+  authStatus(): Promise<AuthStatusRow[]>;
   logout(site: string): Promise<{ supported: boolean }>;
   /** adapter-driven sign-in (`opencli <site> login`); bounded via timeoutMs */
   login(site: string, opts?: { timeoutMs?: number }): Promise<{ loggedIn: boolean; account?: string }>;
@@ -48,7 +50,11 @@ export interface ConnectorServiceDeps {
 export interface ConnectorService {
   /** Current snapshot (cached statuses — never spawns a probe). */
   list(): Promise<ConnectorInfo[]>;
-  /** Probe one site, or every stale login site when omitted (bounded, throttled). */
+  /**
+   * With a site: one DEEP whoami probe (navigates — user-initiated Check).
+   * Without: one bulk `auth status` quickCheck sweep — cookie presence only,
+   * ZERO navigation, zero tabs (the Refresh button; never runs on open).
+   */
   refresh(site?: string): Promise<ConnectorInfo[]>;
   /** Open the site's login in a Render tab and watch whoami until it flips. */
   connect(site: string): Promise<ConnectorInfo[]>;
@@ -65,9 +71,6 @@ interface SiteState {
   detail?: string;
 }
 
-const STALE_MS = 5 * 60_000;
-const MAX_AUTO_PROBES = 8;
-const PROBE_CONCURRENCY = 2;
 const WATCH_INTERVAL_MS = 12_000;
 /**
  * WALL-CLOCK bound for the whoami watch. An attempt count alone stretched the
@@ -296,6 +299,33 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     return snapshot();
   };
 
+  /** Map one `auth status` quickCheck row onto a connector transition. */
+  const applyAuthRow = (row: AuthStatusRow): void => {
+    const state = states.get(row.site);
+    // a live login watch owns its badge; quick rows must not tear it down
+    if (state?.status === 'connecting' || state?.status === 'checking') return;
+    if (row.status === 'logged-in') {
+      apply(row.site, {
+        status: 'connected',
+        ...(row.identity ?? state?.account ? { account: row.identity ?? state?.account } : {}),
+        detail: 'quick check — session cookie present',
+        lastChecked: deps.now(),
+      });
+      return;
+    }
+    if (row.status === 'not-logged-in') {
+      apply(row.site, { status: 'disconnected', lastChecked: deps.now() });
+      return;
+    }
+    apply(row.site, {
+      status: 'unknown',
+      detail: /quickCheck not implemented/i.test(row.error ?? '')
+        ? 'no quick probe for this adapter — hit Check to verify'
+        : (row.error ?? 'quick check inconclusive'),
+      lastChecked: deps.now(),
+    });
+  };
+
   const refresh = async (site?: string): Promise<ConnectorInfo[]> => {
     await ensureCatalog();
     if (site) {
@@ -303,22 +333,19 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
       await probe(site);
       return snapshot();
     }
-    const now = deps.now();
-    const candidates = snapshot()
-      .filter((c) => c.auth === 'login')
-      .filter((c) => c.status !== 'connecting' && c.status !== 'checking')
-      .filter((c) => !c.lastChecked || now - c.lastChecked > STALE_MS)
-      .sort((a, b) => (a.lastChecked ?? 0) - (b.lastChecked ?? 0))
-      .slice(0, MAX_AUTO_PROBES)
-      .map((c) => c.site);
-    const queue = [...candidates];
-    await Promise.all(
-      Array.from({ length: PROBE_CONCURRENCY }, async () => {
-        for (let next = queue.shift(); next && !disposed; next = queue.shift()) {
-          await probe(next);
-        }
-      }),
-    );
+    // Bulk sweep: ONE `auth status` run, quickCheck (cookie presence) per auth
+    // adapter — no page loads, no bridge lease tabs. Only sites this page
+    // tracks are applied; adapters outside the catalog are ignored.
+    const tracked = new Set(snapshot().map((c) => c.site));
+    try {
+      const rows = await deps.router.authStatus();
+      for (const row of rows) {
+        if (tracked.has(row.site)) applyAuthRow(row);
+      }
+    } catch {
+      // sweep unavailable (engine down) — cached statuses stand; per-site
+      // Check still works and reports the real error.
+    }
     return snapshot();
   };
 
