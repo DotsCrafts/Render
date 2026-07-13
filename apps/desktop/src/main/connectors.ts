@@ -25,6 +25,8 @@ import type { ConnectorsStore, StoredConnector } from './connectors-store.js';
 /** The slice of the opencli router the service drives (test seam). */
 export interface ConnectorRouterSlice {
   listSites(): Promise<SiteMeta[]>;
+  /** drop cached opencli metadata so listSites re-reads the real catalog */
+  reloadMetadata?(): Promise<void>;
   whoami(site: string): Promise<WhoamiProbe>;
   /** bulk NO-NAVIGATION quickCheck sweep (`opencli auth status`) — zero tabs */
   authStatus(): Promise<AuthStatusRow[]>;
@@ -56,6 +58,12 @@ export interface ConnectorServiceDeps {
 export interface ConnectorService {
   /** Current snapshot (cached statuses — never spawns a probe). */
   list(): Promise<ConnectorInfo[]>;
+  /**
+   * Re-read the opencli catalog (after an adapter install/patch) and emit the
+   * fresh snapshot — a newly authored adapter appears as a connector without
+   * an app restart.
+   */
+  refreshCatalog(): Promise<ConnectorInfo[]>;
   /**
    * With a site: one DEEP whoami probe (navigates — user-initiated Check).
    * Without: one bulk `auth status` quickCheck sweep — cookie presence only,
@@ -300,6 +308,18 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     return gen;
   };
 
+  const refreshCatalog = async (): Promise<ConnectorInfo[]> => {
+    try {
+      await deps.router.reloadMetadata?.();
+    } catch {
+      /* reload failed (daemon hiccup) — keep serving the stale catalog */
+    }
+    catalog = null;
+    await ensureCatalog();
+    emit();
+    return snapshot();
+  };
+
   const list = async (): Promise<ConnectorInfo[]> => {
     await ensureCatalog();
     return snapshot();
@@ -479,5 +499,5 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     watches.clear();
   };
 
-  return { list, refresh, connect, disconnect, dispose };
+  return { list, refreshCatalog, refresh, connect, disconnect, dispose };
 }

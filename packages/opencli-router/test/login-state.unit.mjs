@@ -270,6 +270,24 @@ test('authStatus: bulk quick sweep is bounded, throttled, and parses rows defens
   assert.equal(typeof call.opts.timeoutMs, 'number', 'the sweep itself must be deadline-bounded');
 });
 
+test('reloadMetadata: drops the cached catalog so a new adapter appears (hot reload)', async () => {
+  let rows = META_ROWS;
+  const sb = fakeSandbox((args) => (args[0] === 'list' ? exec(0, JSON.stringify(rows)) : exec(0, '[]')));
+  const router = createOpencliRouter({ sandbox: sb.provider });
+
+  assert.equal((await router.listSites()).length, 3);
+  rows = [
+    ...META_ROWS,
+    { command: 'newsite/search', site: 'newsite', name: 'search', strategy: 'cookie', browser: true, access: 'read', args: [], domain: 'newsite.com' },
+  ];
+  // without reload the cache would hide the new adapter
+  assert.equal((await router.listSites()).length, 3);
+  await router.reloadMetadata();
+  const sites = await router.listSites();
+  assert.equal(sites.length, 4);
+  assert.equal(sites.find((s) => s.site === 'newsite')?.domain, 'newsite.com');
+});
+
 test('listSites: surfaces the aggregated catalog through the router', async () => {
   const sb = fakeSandbox((args) => (args[0] === 'list' ? listOk() : exec(0, '[]')));
   const router = createOpencliRouter({ sandbox: sb.provider });

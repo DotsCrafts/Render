@@ -26,6 +26,7 @@ import {
   renderBridgeProfile,
   type OpencliBridgeWire,
 } from './opencli-bridge-wire.js';
+import { createAdapterInstaller } from './adapter-install.js';
 import { createCodexProvider } from './codex-provider.js';
 import { createConnectorService } from './connectors.js';
 import { createConnectorsStore } from './connectors-store.js';
@@ -161,10 +162,19 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     now: () => Date.now(),
   });
 
+  // Adapter installer — the trusted half of the agent's `render-adapter` shim.
+  const adapterInstaller = createAdapterInstaller();
+
   // Brain: codex app-server runs in a SECOND sandbox owned by the runtime.
+  // The extra writable root lets opencli's `--trace retain-on-failure` persist
+  // failure evidence (~/.opencli/profiles/*/traces) for the agent's autofix
+  // loop — adapter CODE (~/.opencli/clis) deliberately stays read-only; installs
+  // go through the human-confirmed render-adapter path.
   const agent = createAgentRuntime({
     emit: (event) => broker.emitAgent(event),
-    sandbox: selectSandbox(),
+    sandbox: selectSandbox({
+      extraWritableRoots: [join(app.getPath('home'), '.opencli', 'profiles')],
+    }),
     router,
     // give the BRAIN a CDP endpoint for its own opencli browser-adapter calls.
     // Locally, that's Render's OWN embedded Chromium (--remote-debugging-port);
@@ -194,6 +204,14 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     // via notifyLogin when the login lands.
     connectors: {
       connect: (site) => connectors.connect(site),
+    },
+    // `render-adapter` trusted half: human-approved installs land in
+    // ~/.opencli/clis (local override), then the catalog hot-reloads so the
+    // new/patched adapter routes — and shows as a connector — immediately.
+    installAdapter: async (target, stagedPath) => {
+      const res = adapterInstaller.install(target, stagedPath);
+      if (res.ok) await connectors.refreshCatalog().catch(() => []);
+      return res;
     },
     // route the agent's cookie/browser opencli calls to Render's bridge profile.
     opencliProfile: bridgeProfile,

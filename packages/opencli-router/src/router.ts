@@ -45,6 +45,12 @@ export interface OpencliRouterHandle extends OpencliRouter {
   browserEndpoint(): Promise<string | null>;
   /** per-site aggregates from opencli metadata — the connectors catalog */
   listSites(): Promise<SiteMeta[]>;
+  /**
+   * Drop the cached catalog + classifications and re-read `opencli list` —
+   * called after an adapter install so new/changed commands route correctly
+   * without an app restart.
+   */
+  reloadMetadata(): Promise<void>;
   /** probe the site's login state via `whoami --site-session persistent` */
   whoami(site: string): Promise<WhoamiProbe>;
   /**
@@ -283,6 +289,12 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     return meta.sites();
   };
 
+  const reloadMetadata = async (): Promise<void> => {
+    meta.reset();
+    classifyCache.clear();
+    await ensureMeta(); // throws on failure — callers keep their stale view
+  };
+
   const whoami = async (site: string): Promise<WhoamiProbe> => {
     try {
       await ensureMeta();
@@ -339,6 +351,7 @@ export function createOpencliRouter(deps: OpencliRouterDeps): OpencliRouterHandl
     invoke,
     login,
     listSites,
+    reloadMetadata,
     whoami,
     authStatus,
     logout,
