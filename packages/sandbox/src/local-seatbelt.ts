@@ -42,6 +42,12 @@ function appendTimeoutNote(stderr: string, cmd: string, timeoutMs: number): stri
 export interface LocalSeatbeltOptions {
   /** disable seatbelt wrapping for exec (e.g. on non-macOS); auto on non-darwin */
   disableSeatbelt?: boolean;
+  /**
+   * Additional writable roots beyond workdir+tmp (canonicalized). Keep these
+   * NARROW — e.g. `~/.opencli/profiles` for opencli trace artifacts. Never the
+   * adapter code dir (`~/.opencli/clis`), which stays human-confirm gated.
+   */
+  extraWritableRoots?: readonly string[];
 }
 
 export class LocalSeatbeltSandbox implements SandboxProvider {
@@ -51,9 +57,11 @@ export class LocalSeatbeltSandbox implements SandboxProvider {
   #ownsWorkdir = false;
   #baseEnv: Record<string, string> = {};
   readonly #seatbelt: boolean;
+  readonly #extraWritableRoots: readonly string[];
 
   constructor(opts: LocalSeatbeltOptions = {}) {
     this.#seatbelt = isDarwin && !opts.disableSeatbelt;
+    this.#extraWritableRoots = opts.extraWritableRoots ?? [];
   }
 
   async start(opts: SandboxSpawnOptions = {}): Promise<void> {
@@ -80,7 +88,7 @@ export class LocalSeatbeltSandbox implements SandboxProvider {
     let program = cmd;
     let argv = args;
     if (this.#seatbelt) {
-      const profile = seatbeltProfile(await resolveWritableRoots(cwd));
+      const profile = seatbeltProfile(await resolveWritableRoots(cwd, this.#extraWritableRoots));
       program = 'sandbox-exec';
       argv = ['-p', profile, cmd, ...args];
     }

@@ -16,6 +16,7 @@
  * codex / opencli / CDP stay behind this main-process module.
  */
 
+import { readFileSync } from 'node:fs';
 import { AgentSession } from '@render/agent-bridge';
 import type { OpencliRouterHandle } from '@render/opencli-router';
 import type {
@@ -44,7 +45,10 @@ import {
   parseRenderOpen,
   installRenderPage,
   parseRenderPage,
+  installRenderAdapter,
+  parseRenderAdapter,
   seedPortalExample,
+  type RenderAdapterInvocation,
 } from './agent-instructions.js';
 import { answerToUxMessage } from './answer-to-ux.js';
 import { detectOpencliAuthNeed } from './opencli-auth.js';
@@ -157,6 +161,15 @@ export interface AgentRuntimeDeps {
    * the conversation via notifyLogin — no "did it work?" guessing.
    */
   connectors?: { connect(site: string): Promise<unknown> };
+  /**
+   * Trusted half of the `render-adapter` shim: after the human approves the
+   * confirm card, install the staged adapter into ~/.opencli/clis and
+   * hot-reload the catalog (index.ts wires adapter-install + refreshCatalog).
+   */
+  installAdapter?: (
+    target: string,
+    stagedPath: string,
+  ) => Promise<{ ok: boolean; path?: string; replaced?: boolean; error?: string }>;
   now: () => number;
   approvalPolicy?: ApprovalPolicy;
   sandboxMode?: SandboxMode;
@@ -738,6 +751,15 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           enqueueDeliverPage(pageInv);
           return; // don't also show the raw shim command row
         }
+        // `render-adapter install <site>/<name>.js <staged>` → the agent proposes
+        // a kernel change (autofix patch or a freshly authored adapter). Adapter
+        // code runs in the UNSANDBOXED opencli daemon, so the install is human-
+        // confirmed and performed by the trusted main process.
+        const adapterInv = parseRenderAdapter(collectItemOutput(event.item));
+        if (adapterInv) {
+          void confirmAdapterInstall(adapterInv);
+          // fall through: keep the command row so the stream stays truthful
+        }
         // The agent ran opencli directly and it failed because the site needs a
         // logged-in session. opencli signals this (exit 77 / AUTH_REQUIRED) but
         // the agent just narrates it and falls back to a public source — so the
@@ -844,6 +866,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           writeAgentsMd(deps.sandbox, RENDER_AGENTS_MD, env),
           installRenderOpen(deps.sandbox, env),
           installRenderPage(deps.sandbox, env),
+          installRenderAdapter(deps.sandbox, env),
           seedPortalExample(deps.sandbox, env),
         ]);
         if (binDir) env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
@@ -1089,6 +1112,75 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     });
   };
 
+  /**
+   * The `render-adapter` flow: human confirm → trusted install → tell the agent.
+   * Adapter code executes in the unsandboxed opencli daemon, so the verdict is
+   * always the human's; the agent only ever STAGES a file in its workdir.
+   */
+  const confirmAdapterInstall = async (inv: RenderAdapterInvocation): Promise<void> => {
+    if (!deps.installAdapter) {
+      deps.emit({ kind: 'error', message: 'render-adapter: no installer wired — adapter not installed' });
+      return;
+    }
+    const approved = await new Promise<boolean>((resolve) => {
+      const id = `ux-adapter-${++uxSeq}`;
+      pendingWrite.set(id, resolve);
+      deps.emit({
+        kind: 'ux',
+        message: {
+          id,
+          kind: 'confirm',
+          blocking: true,
+          ts: deps.now(),
+          spec: {
+            message: `The agent wants to install/patch the opencli adapter ${inv.target} (runs OUTSIDE the sandbox)`,
+            detail: [
+              inv.reason ? `reason: ${inv.reason}` : '',
+              `installs to: ~/.opencli/clis/${inv.target} (local override; a backup is kept)`,
+              previewStagedAdapter(inv.stagedPath),
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+            options: ['允许', '拒绝'],
+            danger: true,
+          },
+        },
+      });
+    });
+    const followUp = async (text: string): Promise<void> => {
+      if (session?.activeTurnId) {
+        try {
+          await session.steer(text);
+          return;
+        } catch {
+          /* turn ended — the feed card below is the record */
+        }
+      }
+      deps.emit({
+        kind: 'ux',
+        message: {
+          id: `ux-adapter-${++uxSeq}`,
+          kind: 'render',
+          blocking: false,
+          ts: deps.now(),
+          spec: { title: `adapter ${inv.target}`, body: text },
+        },
+      });
+    };
+    if (!approved) {
+      await followUp(
+        `[adapter install denied] The user declined installing ${inv.target}. Do not retry the install; explain the situation or try a different approach.`,
+      );
+      return;
+    }
+    const res = await deps.installAdapter(inv.target, inv.stagedPath);
+    await followUp(
+      res.ok
+        ? `[adapter installed] ${inv.target} ${res.replaced ? 'replaced the previous override' : 'installed'} at ${res.path}; the opencli catalog was reloaded. Retry the original command now (remember --site-session persistent on login sites).`
+        : `[adapter install failed] ${inv.target}: ${res.error ?? 'unknown error'}. Fix the staged file and run render-adapter install again.`,
+    );
+  };
+
   const notifyLogin = async (site: string, account?: string): Promise<void> => {
     // the session lapsing later may need a fresh login card for this site
     loginPrompted.delete(site);
@@ -1273,6 +1365,18 @@ function loginOpenedUx(
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** First lines of the staged adapter for the confirm card (never the full file). */
+function previewStagedAdapter(stagedPath: string): string {
+  try {
+    const text = readFileSync(stagedPath, 'utf8');
+    const lines = text.split('\n');
+    const head = lines.slice(0, 24).join('\n');
+    return `staged source (${lines.length} lines):\n${head}${lines.length > 24 ? '\n…' : ''}`;
+  } catch (err) {
+    return `staged source unreadable: ${errText(err)}`;
+  }
 }
 
 /**

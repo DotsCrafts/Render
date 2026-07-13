@@ -33,6 +33,7 @@ function fakeRouter(overrides = {}) {
     authStatusCalls,
     router: {
       listSites: overrides.listSites ?? (async () => SITES),
+      ...(overrides.reloadMetadata ? { reloadMetadata: overrides.reloadMetadata } : {}),
       whoami: async (site) => {
         whoamiCalls.push(site);
         const impl = overrides.whoami ?? (async () => ({ kind: 'disconnected' }));
@@ -402,6 +403,33 @@ test('a probe that CONFIRMS the login mid-watch notifies exactly once', async ()
   await new Promise((r) => setTimeout(r, 150)); // let any surviving watch poll run
   assert.deepEqual(connectedEvents, [{ site: 'zhihu', account: 'drej' }]);
   service.dispose();
+});
+
+test('refreshCatalog: reloads metadata and a freshly installed adapter appears + emits', async () => {
+  let rounds = 0;
+  let reloads = 0;
+  const { service, emitted } = harness({
+    router: {
+      listSites: async () =>
+        rounds === 0
+          ? SITES
+          : [
+              ...SITES,
+              { site: 'newsite', domain: 'newsite.com', commands: 2, authCommands: 1, hasLogin: true, hasWhoami: true },
+            ],
+      reloadMetadata: async () => {
+        reloads += 1;
+        rounds += 1;
+      },
+    },
+  });
+  const before = await service.list();
+  assert.equal(bySite(before, 'newsite'), undefined);
+
+  const after = await service.refreshCatalog();
+  assert.equal(reloads, 1);
+  assert.equal(bySite(after, 'newsite').auth, 'login');
+  assert.equal(bySite(emitted[emitted.length - 1], 'newsite')?.site, 'newsite', 'must emit the fresh snapshot');
 });
 
 // ── disconnect ───────────────────────────────────────────────────────────────

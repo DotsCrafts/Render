@@ -103,6 +103,31 @@ flag runs in an EPHEMERAL session and WILL NOT see that login (it falsely report
   the user complete them, then \`whoami --site-session persistent\` each to confirm —
   don't block on one site's full timeout before moving to the next.
 
+## Self-healing adapters (autofix) — when an opencli command breaks
+
+opencli is a PROGRAMMABLE kernel: adapters are readable JS you can diagnose and
+patch. When a site command fails with a repairable code (SELECTOR /
+EMPTY_RESULT / API_ERROR / COMMAND_EXEC / TIMEOUT / PAGE_CHANGED):
+
+**HARD STOPS first — never patch code for these:**
+- \`AUTH_REQUIRED\` (exit 77) → the session is missing/stale: surface login (see above), never "fix" the adapter.
+- \`BROWSER_CONNECT\` (exit 69) → bridge/profile issue: run \`opencli doctor\`, report.
+- CAPTCHA / rate-limit / a "0 results" answer that reproduces in a normal tab → not an adapter bug; report honestly.
+
+**Repair loop (max 3 rounds):**
+1. Rule out noise: retry once with an alternative query/entry point — platforms shape results; don't patch a working adapter.
+2. Collect evidence: rerun with \`--trace retain-on-failure 2>trace.yaml\`, read \`trace.summaryPath\` (front matter has \`adapterSourcePath\` — READ it; it may live inside OpenCLIApp.app, which is read-only and must never be edited).
+3. Explore the live site with \`opencli browser open/state/network\` (never the broken adapter) to find the new selector/endpoint/schema.
+4. Write the COMPLETE fixed adapter file into your workdir (minimal diff; imports only \`@jackwener/opencli/*\` or \`../_shared/*\`; keep output columns compatible).
+5. Propose it: \`render-adapter install <site>/<name>.js <staged-file> <one-line reason>\` — the user sees a confirm card; on approval Render installs it as a LOCAL OVERRIDE (~/.opencli/clis/<site>/, shadows the packaged adapter) and hot-reloads the catalog. Wait for the [adapter installed] / [adapter install denied] signal, then retry the original command ONCE.
+6. Verified fix? Offer to file an upstream issue (jackwener/OpenCLI) — only with the user's explicit OK.
+
+## Authoring a NEW adapter (site not in \`opencli list\`)
+
+1. Recon with \`opencli browser open <url>\` + \`state\` + \`network --filter <fields>\` — find the JSON API if one exists (prefer API over DOM).
+2. Author \`<site>/<command>.js\` in your workdir following an existing adapter's shape (read one from the catalog, e.g. \`~/.opencli/clis/\` overrides or the packaged \`clis/\` dir). For login sites use \`registerSiteAuthCommands({ site, domain, loginUrl, quickCheck, verify, … })\` from \`../_shared/site-auth.js\` — that's what makes login/whoami/auth-status (and Render's Connectors card) work.
+3. \`render-adapter install <site>/<command>.js <staged-file> <reason>\` → after the user approves, the site appears in \`opencli list\` AND in Render's Connectors automatically. Verify by running the new command.
+
 ## Rules
 1. For ANY web search, site lookup, or current/real-time fact: **run opencli**.
    Never say "I can't browse" or answer a web question from memory — you can browse, via opencli.
@@ -435,6 +460,64 @@ export function parseRenderPage(output: string | undefined): RenderPageInvocatio
     ...(allow ? { allow } : {}),
     ...(allowWrite ? { allowWrite } : {}),
   };
+}
+
+/** Sentinel a `render-adapter` invocation prints so the runtime can confirm + install. */
+export const RENDER_ADAPTER_SENTINEL = '__RENDER_ADAPTER__';
+
+/**
+ * Install a `render-adapter install <site>/<name>.js <staged-file> [reason…]`
+ * shim into the sandbox bin dir. The agent CANNOT write ~/.opencli/clis (the
+ * seatbelt confines writes to its workdir, and adapter code executes in the
+ * unsandboxed opencli daemon) — so the shim only PRINTS a TAB-delimited
+ * sentinel; the runtime raises a human confirm and the main process performs
+ * the actual install + catalog hot-reload. Best-effort; reuses the shared bin dir.
+ */
+export async function installRenderAdapter(
+  sandbox: SandboxProvider,
+  env?: Record<string, string>,
+): Promise<string | null> {
+  const binDir = `${sandbox.workdir()}/.render-bin`;
+  const script =
+    `#!/bin/sh\n` +
+    `if [ "$1" != "install" ]; then echo "usage: render-adapter install <site>/<name>.js <staged-file> [reason...]" >&2; exit 64; fi\n` +
+    `shift\n` +
+    `target="$1"; staged="$2"; shift 2 2>/dev/null || { echo "render-adapter: need <site>/<name>.js and <staged-file>" >&2; exit 64; }\n` +
+    `case "$staged" in /*) abs="$staged" ;; *) abs="$(pwd)/$staged" ;; esac\n` +
+    `[ -f "$abs" ] || { echo "render-adapter: staged file not found: $abs" >&2; exit 66; }\n` +
+    `reason="$*"\n` +
+    `printf '${RENDER_ADAPTER_SENTINEL}\\t%s\\t%s\\t%s\\n' "$target" "$abs" "$reason"\n` +
+    `echo "adapter staged — awaiting the user's approval in Render (the install card)."\n`;
+  const cmd =
+    `mkdir -p "${binDir}" && cat > "${binDir}/render-adapter" <<'RENDER_ADAPTER_EOF'\n${script}RENDER_ADAPTER_EOF\nchmod +x "${binDir}/render-adapter"`;
+  try {
+    const res = await sandbox.exec('sh', ['-c', cmd], { cwd: sandbox.workdir(), ...(env ? { env } : {}) });
+    return res.exitCode === 0 ? binDir : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface RenderAdapterInvocation {
+  /** "<site>/<name>.js" inside ~/.opencli/clis */
+  target: string;
+  /** absolute staged source path inside the sandbox workdir */
+  stagedPath: string;
+  /** the agent's one-line justification (shown on the confirm card) */
+  reason?: string;
+}
+
+/** Parse a `render-adapter` sentinel line out of the agent's command output. */
+export function parseRenderAdapter(output: string | undefined): RenderAdapterInvocation | null {
+  if (!output) return null;
+  const line = output.split('\n').find((l) => l.includes(RENDER_ADAPTER_SENTINEL));
+  if (!line) return null;
+  const parts = line.slice(line.indexOf(RENDER_ADAPTER_SENTINEL)).split('\t');
+  const target = (parts[1] ?? '').trim();
+  const stagedPath = (parts[2] ?? '').trim();
+  if (!target || !stagedPath.startsWith('/')) return null;
+  const reason = (parts[3] ?? '').trim() || undefined;
+  return { target, stagedPath, ...(reason ? { reason } : {}) };
 }
 
 /** Extract the URL from a `render-open <url>` command (raw or zsh -lc wrapped). */

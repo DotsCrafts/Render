@@ -109,6 +109,14 @@ export class MetadataIndex {
     return this.#byKey.get(key(site, command));
   }
 
+  /** Forget everything so the next load() re-reads `opencli list` — the hot-
+   *  reload path after an adapter install changes the catalog. */
+  reset(): void {
+    this.#byKey.clear();
+    this.#domainBySite.clear();
+    this.#loaded = false;
+  }
+
   domainFor(site: string): string | undefined {
     return this.#domainBySite.get(site);
   }

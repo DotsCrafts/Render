@@ -12,20 +12,27 @@ export interface SelectSandboxOptions {
   /** force a provider regardless of env (mainly for tests) */
   prefer?: 'local-seatbelt' | 'e2b';
   e2b?: { template?: string; timeoutMs?: number; env?: Record<string, string> };
+  /** extra seatbelt writable roots (local provider only) — keep NARROW */
+  extraWritableRoots?: readonly string[];
 }
 
 export function selectSandbox(opts: SelectSandboxOptions = {}): SandboxProvider {
   const apiKey = process.env.E2B_API_KEY;
   const wantE2b = opts.prefer === 'e2b' || (opts.prefer !== 'local-seatbelt' && Boolean(apiKey));
 
+  const local = () =>
+    new LocalSeatbeltSandbox(
+      opts.extraWritableRoots ? { extraWritableRoots: opts.extraWritableRoots } : {},
+    );
+
   if (wantE2b) {
     if (!apiKey && opts.prefer !== 'e2b') {
       // shouldn't happen, but be explicit about the fallback
-      return new LocalSeatbeltSandbox();
+      return local();
     }
     return new E2bSandbox({ apiKey, ...opts.e2b });
   }
-  return new LocalSeatbeltSandbox();
+  return local();
 }
 
 /** Human-readable note about which provider selectSandbox() would pick + why. */

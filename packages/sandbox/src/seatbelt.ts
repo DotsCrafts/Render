@@ -27,9 +27,17 @@ export function seatbeltProfile(writableRoots: readonly string[]): string {
 
 /**
  * Canonicalize a workdir into the full writable-root set for a seatbelt run.
- * Always includes the temp roots so commands can write scratch files.
+ * Always includes the temp roots so commands can write scratch files. Extra
+ * roots (canonicalized too) let a host grant NARROW additional writes — e.g.
+ * `~/.opencli/profiles` so opencli's `--trace` exporter can persist failure
+ * evidence for the agent's autofix loop. Never grant `~/.opencli/clis` here:
+ * adapter CODE installs stay behind the human-confirmed render-adapter path.
  */
-export async function resolveWritableRoots(workdir: string): Promise<string[]> {
+export async function resolveWritableRoots(
+  workdir: string,
+  extraRoots: readonly string[] = [],
+): Promise<string[]> {
   const real = await realpath(workdir).catch(() => workdir);
-  return [real, ...TMP_ROOTS];
+  const extras = await Promise.all(extraRoots.map((p) => realpath(p).catch(() => p)));
+  return [real, ...TMP_ROOTS, ...extras];
 }
