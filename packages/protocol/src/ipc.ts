@@ -107,6 +107,7 @@ export const IPC = {
   tabActivate: 'render:tabActivate',
   setPanelWidth: 'render:setPanelWidth', // (width:number) — resize the agent panel
   setPanelOpen: 'render:setPanelOpen', // (open:boolean) — collapse/expand the agent panel
+  setInputOpen: 'render:setInputOpen', // (open:boolean) — summon/dismiss the floating input layer
   setOverlay: 'render:setOverlay', // (hidden:boolean) — hide page views for a renderer modal
   getState: 'render:getState',
 
@@ -134,6 +135,7 @@ export const IPC = {
   agentEvent: 'render:agentEvent', // AgentEvent
   tabsChanged: 'render:tabsChanged', // TabState[]
   connectorsChanged: 'render:connectorsChanged', // ConnectorInfo[]
+  summonInput: 'render:summonInput', // app-menu ⌘K — summon + focus the input layer
 } as const;
 
 export interface RenderApi {
@@ -150,9 +152,17 @@ export interface RenderApi {
   setPanelWidth(width: number): Promise<void>;
   /** collapse/expand the agent panel — re-insets native page views to fill the gap */
   setPanelOpen(open: boolean): Promise<void>;
+  /** summon/dismiss the floating input layer — pages reclaim the band when hidden */
+  setInputOpen(open: boolean): Promise<void>;
   /** hide/show native page views so a renderer modal isn't occluded by them */
   setOverlay(hidden: boolean): Promise<void>;
-  getState(): Promise<{ tabs: TabState[]; events?: AgentEvent[]; resolvedUxIds?: string[] }>;
+  getState(): Promise<{
+    tabs: TabState[];
+    events?: AgentEvent[];
+    resolvedUxIds?: string[];
+    /** main's input-layer state — restored on renderer reload (default open) */
+    inputOpen?: boolean;
+  }>;
   /** Flip a delivered page to saved:true so it joins the Saved-Pages gallery. */
   savePage(id: string): Promise<SavedPageMeta | null>;
   /** List the saved pages (newest-first) for the gallery launcher. */
@@ -177,4 +187,6 @@ export interface RenderApi {
   onAgentEvent(cb: (e: AgentEvent) => void): () => void;
   onTabsChanged(cb: (tabs: TabState[]) => void): () => void;
   onConnectorsChanged(cb: (connectors: ConnectorInfo[]) => void): () => void;
+  /** app-menu ⌘K (works while a native page view has focus) → summon + focus the input */
+  onSummonInput(cb: () => void): () => void;
 }

@@ -128,11 +128,13 @@ export function registerIpc(deps: IpcDeps): IpcBroker {
     [IPC.tabActivate]: (_e, tabId: string) => tabs.activate(tabId),
     [IPC.setPanelWidth]: (_e, width: number) => tabs.setPanelWidth(width),
     [IPC.setPanelOpen]: (_e, open: boolean) => tabs.setPanelOpen(open),
+    [IPC.setInputOpen]: (_e, open: boolean) => tabs.setInputOpen(open === true),
     [IPC.setOverlay]: (_e, hidden: boolean) => tabs.setContentHidden(hidden),
     [IPC.getState]: () => ({
       tabs: tabs.snapshot(),
       events: eventLog.slice(),
       resolvedUxIds: [...resolvedUxIds],
+      inputOpen: tabs.inputBandOpen,
     }),
 
     // saved render-pages (Delta 3) — persist a spec, list the gallery, reopen live.

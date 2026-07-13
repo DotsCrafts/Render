@@ -12,17 +12,32 @@
       (connect-src 'self' → 页面只能打 /ux/data,无法外联泄数)。
     -->
     <style>
+      /* Liquid Glass portal — layered ambient backdrop, translucent blurred
+         surfaces with a specular top edge. Same DOM/classes, glassier skin. */
       :root{
-        --bg:#f4f6fa; --card:#fff; --ink:#141821; --soft:#697384; --line:#e4e8ef;
-        --accent:#3b6cff; --accent-ink:#fff; --chip:#eef1f7; --shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.06);
-        --good:#1a8f54; --warn:#c9620a; --radius:16px;
+        --bg:#eef2f9; --ink:#141821; --soft:#697384; --line:rgba(20,28,45,.1);
+        --accent:#3b6cff; --accent-ink:#fff;
+        --good:#1a8f54; --warn:#c9620a; --radius:18px;
+        --glass:rgba(255,255,255,.55); --glass-strong:rgba(255,255,255,.72);
+        --chip:rgba(255,255,255,.5); --edge:rgba(255,255,255,.75);
+        --shadow:inset 0 1px 0 var(--edge),0 1px 2px rgba(16,24,40,.05),0 10px 30px rgba(16,24,40,.08);
+        --halo-a:rgba(99,132,255,.22); --halo-b:rgba(140,225,255,.2); --halo-c:rgba(255,183,220,.16);
       }
       @media (prefers-color-scheme:dark){:root{
-        --bg:#0b0d11; --card:#14171d; --ink:#eef1f6; --soft:#9aa4b3; --line:#252b34;
-        --accent:#5e86ff; --chip:#1b1f27; --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+        --bg:#0b0d13; --ink:#eef1f6; --soft:#9aa4b3; --line:rgba(255,255,255,.09);
+        --accent:#5e86ff;
+        --glass:rgba(22,26,36,.5); --glass-strong:rgba(24,28,40,.66);
+        --chip:rgba(255,255,255,.06); --edge:rgba(255,255,255,.12);
+        --shadow:inset 0 1px 0 var(--edge),0 1px 2px rgba(0,0,0,.4),0 12px 34px rgba(0,0,0,.4);
+        --halo-a:rgba(76,102,255,.2); --halo-b:rgba(56,180,255,.12); --halo-c:rgba(190,120,255,.12);
         --good:#43d089; --warn:#f0a35a;}}
       *{box-sizing:border-box}
-      body{margin:0;background:var(--bg);color:var(--ink);
+      body{margin:0;color:var(--ink);background:
+        radial-gradient(1100px 520px at 18% -8%,var(--halo-a),transparent 60%),
+        radial-gradient(900px 480px at 86% 4%,var(--halo-b),transparent 62%),
+        radial-gradient(1000px 700px at 55% 112%,var(--halo-c),transparent 60%),
+        var(--bg);
+        background-attachment:fixed;
         font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
       a{color:inherit;text-decoration:none}
       .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 70px}
@@ -33,18 +48,22 @@
       .logo b{color:var(--accent)}
       .tagline{color:var(--soft);font-size:13px;margin-top:2px}
       .searchbar{display:flex;gap:8px;max-width:680px;margin:20px auto 0}
-      .searchbar input{flex:1;min-width:0;background:var(--card);border:1.5px solid var(--line);border-radius:999px;
-        padding:13px 20px;font-size:16px;color:var(--ink);box-shadow:var(--shadow)}
-      .searchbar input:focus{outline:none;border-color:var(--accent)}
+      .searchbar input{flex:1;min-width:0;background:var(--glass-strong);border:1px solid var(--line);border-radius:999px;
+        padding:13px 20px;font-size:16px;color:var(--ink);box-shadow:var(--shadow);
+        backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4)}
+      .searchbar input:focus{outline:none;border-color:var(--accent);box-shadow:var(--shadow),0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
       .searchbar button{border:0;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:700;
-        padding:0 26px;font-size:15px;cursor:pointer}
+        padding:0 26px;font-size:15px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 6px 18px color-mix(in srgb,var(--accent) 35%,transparent)}
       .quicklinks{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:14px auto 0;max-width:760px}
-      .quicklinks a{font-size:13px;color:var(--soft);background:var(--chip);padding:6px 13px;border-radius:999px}
-      .quicklinks a:hover{color:var(--ink)}
+      .quicklinks a{font-size:13px;color:var(--soft);background:var(--chip);padding:6px 13px;border-radius:999px;
+        border:1px solid var(--line);box-shadow:inset 0 1px 0 var(--edge);
+        backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+      .quicklinks a:hover{color:var(--ink);background:var(--glass)}
 
       /* ── carousel ── */
-      .discover{margin:26px 0 8px;background:linear-gradient(120deg,color-mix(in srgb,var(--accent) 12%,transparent),transparent);
-        border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;display:flex;align-items:center;gap:16px;min-height:64px}
+      .discover{margin:26px 0 8px;background:linear-gradient(120deg,color-mix(in srgb,var(--accent) 14%,transparent),var(--glass));
+        border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;display:flex;align-items:center;gap:16px;min-height:64px;
+        box-shadow:var(--shadow);backdrop-filter:blur(20px) saturate(1.35);-webkit-backdrop-filter:blur(20px) saturate(1.35)}
       .discover .lbl{font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap;letter-spacing:.04em}
       .discover .slot{flex:1;min-width:0}
       .discover .dname{font-weight:700}.discover .dname code{font-size:12px;color:var(--soft)}
@@ -54,8 +73,9 @@
 
       /* ── widget grid ── */
       .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:18px}
-      .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
-        display:flex;flex-direction:column;overflow:hidden;min-height:240px}
+      .card{background:var(--glass);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+        display:flex;flex-direction:column;overflow:hidden;min-height:240px;
+        backdrop-filter:blur(24px) saturate(1.4);-webkit-backdrop-filter:blur(24px) saturate(1.4)}
       .card h2{font-size:15px;margin:0;padding:14px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
       .card h2 .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:#fff;font-size:12px;font-weight:800;flex:0 0 auto}
       .card h2 .sp{flex:1}

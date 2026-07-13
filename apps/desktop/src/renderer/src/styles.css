@@ -8,7 +8,8 @@
 :root {
   --top-bar: 84px;
   --panel-width: 460px; /* MUST match main/layout.ts CHROME.panelWidth (default; resizable) */
-  --bottom-band: 76px;
+  --bottom-band: 76px; /* MUST match main/layout.ts CHROME.bottomBand */
+  --handle-band: 14px; /* MUST match main/layout.ts CHROME.handleBand */
 }
 
 * {
@@ -31,38 +32,76 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
+/* Liquid Glass (macOS): the window carries an under-window vibrancy material
+   (main/index.ts), so the chrome regions go translucent and the desktop reads
+   through them, softly blurred. Non-mac windows keep the solid base. */
+html.glass body {
+  background: color-mix(in oklab, var(--bg-base) 72%, transparent);
+}
 
 .app {
   display: grid;
   grid-template-columns: 1fr var(--panel-width);
-  grid-template-rows: var(--top-bar) 1fr var(--bottom-band);
+  grid-template-rows: var(--top-bar) 1fr;
   grid-template-areas:
     'topbar topbar'
-    'stage  panel'
-    'input  panel';
+    'stage  panel';
   height: 100vh;
 }
 .app.panel-collapsed {
   grid-template-columns: 1fr 0;
 }
 
-/* ── top bar ─────────────────────────────────────────────────────────────── */
+/* ── top bar — one glass slab, two fixed rows (tabs, omnibox+actions) ─────── */
 .topbar {
   grid-area: topbar;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border, var(--border));
   background: var(--bg-base);
+  box-shadow: inset 0 1px 0 var(--glass-edge, transparent);
   display: flex;
   flex-direction: column;
   -webkit-app-region: drag;
 }
+html.glass .topbar {
+  background: var(--glass-bg);
+}
 .tabstrip {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--sp-1);
   height: 40px;
-  padding: 0 var(--sp-2) 0 80px; /* leave room for macOS traffic lights */
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   overflow-x: auto;
   scrollbar-width: none;
+}
+/* hiddenInset traffic lights (mac only) sit inside the strip — inset past them */
+html.mac .tabstrip {
+  padding-left: 80px;
+}
+.omnirow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding-right: var(--sp-2);
+}
+.omnirow .omnibox {
+  flex: 1;
+  min-width: 0;
+}
+.chrome-actions {
+  -webkit-app-region: no-drag;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.chrome-actions-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border);
 }
 .tabstrip::-webkit-scrollbar {
   display: none;
@@ -76,20 +115,28 @@ body {
   min-width: 120px;
   max-width: 220px;
   padding: 0 6px 0 11px;
-  border-radius: var(--r-sm);
+  border-radius: 10px;
   background: transparent;
   color: var(--fg-subtle);
   cursor: default;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 .tab:hover {
   background: var(--bg-hover);
   color: var(--fg-muted);
 }
+/* active tab = a small glass chip riding the toolbar slab */
 .tab.active {
   background: var(--bg-surface);
   box-shadow: inset 0 0 0 1px var(--border);
   color: var(--fg);
+}
+html.glass .tab.active {
+  background: var(--glass-bg-soft);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px var(--glass-border),
+    var(--shadow-sm);
 }
 .tab .favicon {
   width: 13px;
@@ -172,7 +219,7 @@ body {
   gap: 2px;
   height: 30px;
   padding: 0 4px 0 8px;
-  border-radius: var(--r-md);
+  border-radius: 12px; /* wraps 10px tab chips — capsule harmony */
   /* tinted backdrop + an inset ring so the group reads as one unit */
   background: color-mix(in oklab, var(--group-color, var(--agent)) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--group-color, var(--agent)) 30%, transparent);
@@ -198,14 +245,12 @@ body {
   box-shadow: none;
 }
 
-/* ── settings button ─────────────────────────────────────────────────────── */
+/* ── toolbar action buttons (ask / connectors / saved pages / settings) ───── */
 .settings-btn {
   -webkit-app-region: no-drag;
-  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 4px;
   border: none;
   background: transparent;
   color: var(--fg-muted);
@@ -218,12 +263,22 @@ body {
   background: var(--bg-surface);
   color: var(--fg);
 }
+html.glass .settings-btn:hover {
+  background: var(--bg-hover);
+}
+.settings-btn.on {
+  color: var(--brand);
+  background: var(--brand-tint);
+  box-shadow: inset 0 0 0 1px var(--brand-line);
+}
 
 /* ── codex settings modal ────────────────────────────────────────────────── */
 .cx-overlay {
   position: fixed;
   inset: 0;
-  background: oklch(0 0 0 / 0.5);
+  background: oklch(0 0 0 / 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -237,10 +292,17 @@ body {
   overflow-y: auto;
   background: var(--bg-overlay);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
+  border-radius: 22px;
   box-shadow: var(--shadow-pop);
   padding: 18px 20px;
   color: var(--fg);
+}
+html.glass .cx-panel {
+  background: var(--glass-bg-strong);
+  border-color: transparent;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--shadow-glass), var(--shadow-win);
 }
 .cx-head {
   display: flex;
@@ -418,9 +480,22 @@ body {
   border-radius: var(--r-pill);
   background: var(--bg-inset);
   box-shadow: inset 0 0 0 1px var(--border);
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+html.glass .omnibox .field {
+  background: color-mix(in oklab, var(--bg-inset) 66%, transparent);
+  box-shadow:
+    inset 0 1px 2px oklch(0 0 0 / 0.18),
+    inset 0 0 0 1px var(--glass-border);
 }
 .omnibox .field.focused {
   box-shadow: inset 0 0 0 1px var(--brand-line);
+}
+html.glass .omnibox .field.focused {
+  background: color-mix(in oklab, var(--bg-inset) 82%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--brand-line),
+    0 0 0 3px var(--brand-tint);
 }
 .omnibox .secure {
   flex: none;
@@ -477,6 +552,9 @@ body {
   position: relative;
   overflow: hidden;
 }
+html.glass .stage {
+  background: color-mix(in oklab, var(--bg-canvas) 55%, transparent);
+}
 
 /* first-run / home identity shown when no page occupies the stage */
 .rd-home {
@@ -498,9 +576,11 @@ body {
 .rd-home-logo {
   width: 44px;
   height: 44px;
-  border-radius: var(--r-lg);
+  border-radius: 14px;
   background: var(--brand-tint);
-  box-shadow: inset 0 0 0 1px var(--brand-line);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge, transparent),
+    inset 0 0 0 1px var(--brand-line);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -531,7 +611,7 @@ body {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: var(--r-md);
+  border-radius: 14px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   color: var(--fg-muted);
@@ -540,10 +620,19 @@ body {
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
+html.glass .rd-home-prompt {
+  background: var(--glass-bg-soft);
+  border-color: var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
 .rd-home-prompt:hover {
   background: var(--bg-raised);
   border-color: var(--brand-line);
   color: var(--fg);
+}
+html.glass .rd-home-prompt:hover {
+  background: var(--glass-bg);
+  border-color: var(--brand-line);
 }
 .rd-home-prompt .ic {
   flex: none;
@@ -567,14 +656,73 @@ body {
   animation: rd-spin 0.7s linear infinite;
 }
 
-/* ── floating input band ─────────────────────────────────────────────────── */
+/* ── floating input LAYER — summonable, dismissible, never fixed real estate ──
+   An overlay pinned to the bottom of the stage column (never under the panel).
+   Open: a glass pill floats in the band; main insets pages by --bottom-band.
+   Dismissed: the pill slides out, pages reclaim everything except a slim
+   --handle-band strip holding the home-indicator-style recall handle. */
 .inputband {
-  grid-area: input;
+  position: fixed;
+  left: 0;
+  right: var(--panel-width);
+  bottom: 0;
+  height: var(--bottom-band);
   display: grid;
   place-items: center;
   background: transparent;
   pointer-events: none;
+  z-index: 60;
 }
+.app.panel-collapsed .inputband {
+  right: 0;
+}
+/* a renderer modal owns the screen — suppress the input layer beneath it so
+   the pill doesn't ghost through the scrim (focus is blurred out in App) */
+.app.modal-open .inputband {
+  visibility: hidden;
+}
+/* the recall handle — a home-indicator bar living in the slim reserved strip
+   (its hit area IS the --handle-band strip main leaves uncovered) */
+.input-summon {
+  pointer-events: auto;
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 120px;
+  height: var(--handle-band);
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.2s ease 0.12s;
+}
+.input-summon-bar {
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--fg-faint);
+  box-shadow: 0 1px 4px oklch(0 0 0 / 0.35);
+  transition: width 0.18s ease, background 0.18s ease;
+}
+.input-summon:hover .input-summon-bar,
+.input-summon:focus-visible .input-summon-bar {
+  width: 64px;
+  background: var(--fg-muted);
+}
+.inputband.busy .input-summon-bar {
+  background: var(--brand);
+  animation: rd-pulse 1.4s ease-in-out infinite;
+}
+.inputband.open .input-summon {
+  opacity: 0;
+  pointer-events: none;
+  transition-delay: 0s;
+}
+/* the glass pill itself */
 .floating {
   -webkit-app-region: no-drag;
   pointer-events: auto;
@@ -587,6 +735,39 @@ body {
   background: var(--bg-overlay);
   border-radius: var(--r-pill);
   box-shadow: var(--shadow-pill);
+  transform: translateY(0);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    transform 0.32s cubic-bezier(0.32, 0.72, 0.28, 1),
+    opacity 0.22s ease,
+    visibility 0s 0s;
+}
+html.glass .floating {
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--shadow-glass-pill);
+}
+.inputband:not(.open) .floating {
+  transform: translateY(calc(100% + 26px));
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 0.32s cubic-bezier(0.32, 0.72, 0.28, 1),
+    opacity 0.22s ease,
+    visibility 0s 0.32s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .floating,
+  .input-summon,
+  .input-summon-bar {
+    transition: none;
+  }
+  .inputband.busy .input-summon-bar,
+  .floating button.mic.listening {
+    animation: none;
+  }
 }
 .floating .glyph {
   display: flex;
@@ -637,6 +818,25 @@ body {
   opacity: 0.45;
   cursor: default;
 }
+/* voice input — a quiet ghost control; recording turns it live */
+.floating button.mic {
+  background: transparent;
+  color: var(--fg-muted);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.floating button.mic:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.floating button.mic.listening {
+  background: var(--danger-tint);
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--danger) 45%, transparent);
+  animation: rd-pulse 1.2s ease-in-out infinite;
+}
+.floating button.mic:disabled {
+  opacity: 0.35;
+}
 
 /* ── agent panel ─────────────────────────────────────────────────────────── */
 .panel {
@@ -647,6 +847,13 @@ body {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+}
+html.glass .panel {
+  border-left-color: var(--glass-border);
+  background: color-mix(in oklab, var(--bg-surface) 80%, transparent);
+}
+html.glass .panel .rd-panel {
+  background: transparent;
 }
 .app.panel-collapsed .panel {
   display: none;
@@ -681,7 +888,9 @@ body {
 .gallery-scrim {
   position: fixed;
   inset: 0;
-  background: oklch(0 0 0 / 0.5);
+  background: oklch(0 0 0 / 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -695,9 +904,16 @@ body {
   flex-direction: column;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
+  border-radius: 22px;
   box-shadow: var(--shadow-win);
   overflow: hidden;
+}
+html.glass .gallery {
+  background: var(--glass-bg-strong);
+  border-color: transparent;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--shadow-glass), var(--shadow-win);
 }
 .gallery-head {
   display: flex;

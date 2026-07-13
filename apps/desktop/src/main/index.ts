@@ -12,6 +12,7 @@
 
 import { app, BrowserWindow } from 'electron';
 import { join } from 'node:path';
+import { IPC } from '@render/protocol';
 import { createHumanHand } from '@render/cdp-human-hand';
 import { selectSandbox } from '@render/sandbox';
 import { createOpencliRouter } from '@render/opencli-router';
@@ -42,13 +43,26 @@ import { ensureOpencliDaemon } from './opencli-daemon.js';
 const renderCdp = enableRenderCdp();
 
 function createWindow(): BrowserWindow {
+  const isMac = process.platform === 'darwin';
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#0d1117',
     title: 'Render',
+    // Liquid Glass shell (macOS): the chrome IS the window — no separate title
+    // bar (the tab strip doubles as the drag region, inset for traffic lights),
+    // and an under-window vibrancy material shows through the translucent
+    // chrome regions. Other platforms keep the solid framed window.
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 18, y: 13 },
+          vibrancy: 'under-window' as const,
+          visualEffectState: 'active' as const,
+          backgroundColor: '#00000000',
+        }
+      : { backgroundColor: '#0d1117' }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -289,7 +303,10 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
   });
 
   // Browser-correct keyboard semantics: Cmd+W closes the active TAB (full
-  // teardown), not the whole window. New tab opens the home portal.
+  // teardown), not the whole window. New tab opens the home portal. Cmd+K
+  // summons the floating input layer even while a page view holds focus —
+  // focus must come back to the chrome renderer BEFORE the summon event so
+  // the input's .focus() lands.
   installAppMenu({
     closeActiveTab: () => {
       const id = tabs.activeTabId;
@@ -297,6 +314,11 @@ function wire(win: BrowserWindow, daemonReady: Promise<boolean>): void {
     },
     newTab: () => {
       tabs.create();
+    },
+    summonInput: () => {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+      win.webContents.focus();
+      win.webContents.send(IPC.summonInput);
     },
   });
 

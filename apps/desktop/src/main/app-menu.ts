@@ -20,6 +20,12 @@ export interface AppMenuActions {
   closeActiveTab: () => void;
   /** Open a new tab (home/portal URL). */
   newTab: () => void;
+  /**
+   * ⌘K — summon + focus the floating input layer. A real menu accelerator is
+   * the only path that works while a native page WebContentsView holds focus
+   * (the chrome renderer's own keydown listener never sees those keystrokes).
+   */
+  summonInput: () => void;
 }
 
 export function installAppMenu(actions: AppMenuActions): void {
@@ -30,6 +36,8 @@ export function installAppMenu(actions: AppMenuActions): void {
     {
       label: 'File',
       submenu: [
+        { label: 'Ask Render…', accelerator: 'CmdOrCtrl+K', click: () => actions.summonInput() },
+        { type: 'separator' },
         { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => actions.newTab() },
         // The fix: Cmd+W closes the TAB, not the window — full page teardown.
         { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => actions.closeActiveTab() },

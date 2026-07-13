@@ -28,6 +28,7 @@ const api: RenderApi = {
   tabActivate: (tabId) => ipcRenderer.invoke(IPC.tabActivate, tabId),
   setPanelWidth: (width) => ipcRenderer.invoke(IPC.setPanelWidth, width),
   setPanelOpen: (open) => ipcRenderer.invoke(IPC.setPanelOpen, open),
+  setInputOpen: (open) => ipcRenderer.invoke(IPC.setInputOpen, open),
   setOverlay: (hidden) => ipcRenderer.invoke(IPC.setOverlay, hidden),
   getState: () => ipcRenderer.invoke(IPC.getState),
 
@@ -61,6 +62,11 @@ const api: RenderApi = {
     const listener = (_e: unknown, connectors: ConnectorInfo[]): void => cb(connectors);
     ipcRenderer.on(IPC.connectorsChanged, listener);
     return () => ipcRenderer.removeListener(IPC.connectorsChanged, listener);
+  },
+  onSummonInput: (cb: () => void) => {
+    const listener = (): void => cb();
+    ipcRenderer.on(IPC.summonInput, listener);
+    return () => ipcRenderer.removeListener(IPC.summonInput, listener);
   },
 };
 

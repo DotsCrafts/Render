@@ -25,6 +25,13 @@ export interface RenderState {
   busy: boolean;
   /** ux message ids resolved before a renderer reload (replayed from main). */
   resolvedUxIds: string[];
+  /**
+   * Main's input-layer state, replayed from getState — null until it arrives.
+   * A renderer reload must ADOPT this instead of re-summoning a dismissed
+   * input (main's page insets already reflect it; fighting it causes a 62px
+   * page jump and a momentarily occluded pill).
+   */
+  restoredInputOpen: boolean | null;
   actions: {
     submit: (text: string) => void;
     /** steer the RUNNING turn (mid-run refinement) instead of starting one */
@@ -53,6 +60,7 @@ export function useRenderState(): RenderState {
   // busy = at least one turn open; see agent-event-buffer.ts for lifecycle rules
   const [openTurns, setOpenTurns] = useState<readonly string[]>([]);
   const [resolvedUxIds, setResolvedUxIds] = useState<string[]>([]);
+  const [restoredInputOpen, setRestoredInputOpen] = useState<boolean | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
@@ -80,6 +88,8 @@ export function useRenderState(): RenderState {
         }
         // resolutions recorded before the reload — their cards render inert
         if (s.resolvedUxIds && s.resolvedUxIds.length) setResolvedUxIds(s.resolvedUxIds);
+        // main's input-layer state (default open for older mains omitting it)
+        setRestoredInputOpen(s.inputOpen ?? true);
         if (activeRef.current === null) setActiveId(s.tabs[s.tabs.length - 1]?.id ?? null);
       })
       .catch((err) => appendLocalError('load state failed', err));
@@ -195,6 +205,7 @@ export function useRenderState(): RenderState {
     events,
     busy: openTurns.length > 0,
     resolvedUxIds,
+    restoredInputOpen,
     actions: {
       submit,
       steer,

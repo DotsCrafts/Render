@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Render · Liquid Glass 界面改造报告</title>
+<style>
+  :root{
+    --bg:#f2f4f9; --ink:#161922; --soft:#667082; --line:rgba(22,28,45,.1);
+    --accent:#4a6bff; --good:#158a52; --warn:#b3620e; --bad:#c23d4e;
+    --glass:rgba(255,255,255,.62); --glass2:rgba(255,255,255,.42); --edge:rgba(255,255,255,.8);
+    --shadow:inset 0 1px 0 var(--edge),0 1px 2px rgba(16,24,40,.05),0 12px 32px rgba(16,24,40,.09);
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --halo-a:rgba(99,132,255,.2); --halo-b:rgba(120,220,255,.18); --halo-c:rgba(255,170,210,.14);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0b0d13; --ink:#edf0f6; --soft:#98a2b3; --line:rgba(255,255,255,.09);
+    --accent:#7a95ff; --good:#4ad08d; --warn:#f0a35a; --bad:#ff7385;
+    --glass:rgba(23,27,38,.55); --glass2:rgba(23,27,38,.35); --edge:rgba(255,255,255,.12);
+    --shadow:inset 0 1px 0 var(--edge),0 1px 2px rgba(0,0,0,.4),0 14px 36px rgba(0,0,0,.42);
+    --halo-a:rgba(76,102,255,.2); --halo-b:rgba(56,180,255,.1); --halo-c:rgba(190,120,255,.12);
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    background:radial-gradient(1000px 480px at 15% -6%,var(--halo-a),transparent 60%),
+      radial-gradient(900px 460px at 88% 2%,var(--halo-b),transparent 62%),
+      radial-gradient(1100px 720px at 50% 115%,var(--halo-c),transparent 60%),var(--bg);
+    background-attachment:fixed;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:980px;margin:0 auto;padding:34px 22px 60px}
+  h1{font-size:26px;letter-spacing:-.02em;margin:0 0 4px}
+  h1 b{color:var(--accent)}
+  .sub{color:var(--soft);font-size:13.5px;margin-bottom:26px}
+  h2{font-size:17px;margin:34px 0 12px;display:flex;align-items:center;gap:8px}
+  h2 .n{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:800}
+  .card{background:var(--glass);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);
+    backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35);padding:16px 18px;margin:10px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px;letter-spacing:.02em}
+  .tag.fix{background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good)}
+  .tag.new{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+  .tag.design{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+  code{font:12.5px var(--mono);background:var(--glass2);border:1px solid var(--line);padding:1px 6px;border-radius:6px}
+  pre{font:12px/1.5 var(--mono);background:var(--glass2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--soft);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  .ok{color:var(--good);font-weight:700}
+  .muted{color:var(--soft)}
+  kbd{font:11.5px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:1px 6px;background:var(--glass2)}
+  /* ── before/after diagram ── */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:8px 0}
+  @media (max-width:760px){.ba{grid-template-columns:1fr}}
+  .ba figure{margin:0}
+  .ba figcaption{font-size:12.5px;color:var(--soft);margin:6px 2px}
+  .ba svg{width:100%;height:auto;border-radius:14px;border:1px solid var(--line);box-shadow:var(--shadow);display:block;background:var(--glass2)}
+  /* ── interactive input-layer demo ── */
+  .demo{position:relative;height:250px;border-radius:16px;border:1px solid var(--line);overflow:hidden;
+    background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 10%,transparent),transparent 55%),var(--glass2)}
+  .demo .page{position:absolute;inset:12px 12px var(--demo-inset,76px);border-radius:10px;border:1px dashed var(--line);
+    display:grid;place-items:center;color:var(--soft);font-size:13px;transition:inset-block-end .3s cubic-bezier(.32,.72,.28,1)}
+  .demo .pill{position:absolute;left:50%;bottom:15px;transform:translate(-50%,0);width:min(420px,80%);height:44px;border-radius:999px;
+    background:var(--glass);border:1px solid var(--line);box-shadow:var(--shadow);
+    backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
+    display:flex;align-items:center;gap:10px;padding:0 8px 0 16px;font-size:13.5px;color:var(--soft);
+    transition:transform .3s cubic-bezier(.32,.72,.28,1),opacity .22s}
+  .demo .pill .send{margin-left:auto;width:28px;height:28px;border-radius:999px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:13px}
+  .demo .pill .mic{width:28px;height:28px;border-radius:999px;border:1px solid var(--line);display:grid;place-items:center;font-size:12px}
+  .demo.hidden .pill{transform:translate(-50%,140%);opacity:0}
+  .demo.hidden .page{--demo-inset:14px}
+  .demo .handle{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);width:44px;height:5px;border-radius:999px;
+    background:var(--soft);opacity:0;transition:opacity .2s .1s;cursor:pointer}
+  .demo.hidden .handle{opacity:.85}
+  .demo-btns{display:flex;gap:8px;margin-top:10px}
+  .demo-btns button{border:1px solid var(--line);background:var(--glass);color:var(--ink);border-radius:999px;
+    padding:7px 16px;font-size:13px;cursor:pointer;box-shadow:inset 0 1px 0 var(--edge)}
+  .demo-btns button:hover{border-color:var(--accent)}
+  footer{margin-top:44px;color:var(--soft);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  ul{margin:6px 0;padding-left:20px} li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Render · <b>Liquid Glass</b> 界面改造</h1>
+  <div class="sub">2026-07-13 · branch <code>claude/render-interface-optimization-cb214c</code> · 13 个文件，+535 / −95 · typecheck ✓ · 61 项单测 ✓ · CDP 实机行为验证 ✓</div>
+
+  <h2><span class="n">1</span>标签页被遮挡 & 按钮竖排 <span class="tag fix">FIX</span></h2>
+  <div class="card">
+    <p style="margin-top:2px">两个问题同一个根因：<code>.topbar</code> 是 84px 高的 flex-column，三个功能按钮作为额外子元素被塞进去后自然高度达 168px —— flex 收缩把标签条压扁（标签被剪裁），按钮溢出到页面中央（竖排图标）。</p>
+    <div class="ba">
+      <figure>
+        <svg viewBox="0 0 400 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="改造前布局">
+          <rect x="8" y="8" width="384" height="26" rx="6" fill="currentColor" opacity=".08"/>
+          <rect x="16" y="26" width="70" height="8" rx="3" fill="#c23d4e" opacity=".7"/>
+          <rect x="92" y="26" width="70" height="8" rx="3" fill="#c23d4e" opacity=".5"/>
+          <text x="176" y="34" font-size="9" fill="#c23d4e">标签被剪裁 ✗</text>
+          <rect x="8" y="38" width="384" height="24" rx="6" fill="currentColor" opacity=".06"/>
+          <rect x="20" y="44" width="250" height="12" rx="6" fill="currentColor" opacity=".14"/>
+          <g fill="#c23d4e" opacity=".85">
+            <rect x="192" y="70" width="16" height="16" rx="4"/>
+            <rect x="192" y="92" width="16" height="16" rx="4"/>
+            <rect x="192" y="114" width="16" height="16" rx="4"/>
+          </g>
+          <text x="216" y="102" font-size="9" fill="#c23d4e">按钮溢出竖排 ✗</text>
+        </svg>
+        <figcaption>改造前：84px 容器塞 168px 内容</figcaption>
+      </figure>
+      <figure>
+        <svg viewBox="0 0 400 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="改造后布局">
+          <rect x="8" y="8" width="384" height="34" rx="8" fill="currentColor" opacity=".08"/>
+          <circle cx="22" cy="25" r="4" fill="#ff5f57"/><circle cx="36" cy="25" r="4" fill="#febc2e"/><circle cx="50" cy="25" r="4" fill="#28c840"/>
+          <rect x="68" y="15" width="86" height="20" rx="7" fill="currentColor" opacity=".16"/>
+          <rect x="160" y="15" width="86" height="20" rx="7" fill="currentColor" opacity=".08"/>
+          <text x="380" y="29" font-size="9" fill="#158a52" text-anchor="end">40px 标签行 ✓</text>
+          <rect x="8" y="46" width="384" height="30" rx="8" fill="currentColor" opacity=".06"/>
+          <rect x="42" y="53" width="230" height="16" rx="8" fill="currentColor" opacity=".14"/>
+          <g fill="#158a52" opacity=".9">
+            <rect x="288" y="54" width="14" height="14" rx="4"/>
+            <rect x="308" y="54" width="14" height="14" rx="4"/>
+            <rect x="328" y="54" width="14" height="14" rx="4"/>
+            <rect x="348" y="54" width="14" height="14" rx="4"/>
+          </g>
+          <text x="380" y="90" font-size="9" fill="#158a52" text-anchor="end">44px 地址行 + 右侧按钮群 ✓</text>
+          <rect x="8" y="100" width="384" height="42" rx="8" fill="currentColor" opacity=".04"/>
+          <text x="200" y="125" font-size="9" fill="currentColor" opacity=".4" text-anchor="middle">页面内容（原生视图，从 y=84 起）</text>
+        </svg>
+        <figcaption>改造后：两行定高结构，按钮进入 omnibox 行右侧集群</figcaption>
+      </figure>
+    </div>
+    <p class="muted" style="font-size:13px">按钮群新顺序：<b>Ask Render</b>（输入层开关，新增）· Connectors · Saved Pages · Settings —— 与 <kbd>⌘K</kbd> 呼应，位置符合浏览器惯例（工具栏右端）。</p>
+  </div>
+
+  <h2><span class="n">2</span>Liquid Glass 设计语言 <span class="tag design">DESIGN</span></h2>
+  <div class="card">
+    <p style="margin-top:2px">向 Apple Liquid Glass 靠拢的三层做法，为未来 AR / 穿戴显示预留「内容居中、玻璃悬浮」的空间语义：</p>
+    <ul>
+      <li><b>真实材质（窗口层）</b>：macOS 窗口改为 <code>titleBarStyle: hiddenInset</code> + <code>vibrancy: under-window</code> + 透明背景 —— 去掉了截图里那条多余的 "Render" 标题栏（这就是标签「被盖住」的观感来源之一），红绿灯直接嵌进标签行，桌面透过半透明 chrome 形成真实玻璃。非 mac 平台自动回退实心窗口。</li>
+      <li><b>材质令牌（tokens 层）</b>：<code>packages/ux-render/tokens.css</code> 新增 <code>--glass-bg / --glass-bg-strong / --glass-bg-soft / --glass-border / --glass-edge / --glass-blur / --glass-saturate / --shadow-glass(-pill)</code>，暗色 + 亮色全套。chrome、agent 面板、模态、生成式卡片共享同一套 <code>:root</code>，一处定义全局生效。</li>
+      <li><b>表面应用（chrome 层）</b>：顶栏玻璃板（<code>oklch(...) / 0.58</code> 半透明 + 顶缘高光）、活动标签玻璃芯片、omnibox 胶囊、输入胶囊 <code>blur(26px) saturate(1.4)</code>、面板/模态玻璃化、Home 提示卡玻璃 chip、fallback 门户（<code>portal.html</code>）整页玻璃重绘。全部带 <code>prefers-reduced-motion</code> 守卫。</li>
+    </ul>
+    <div class="grid2">
+      <pre>/* tokens.css 摘录（dark） */
+--glass-bg:        oklch(0.21 0.008 264 / 0.58);
+--glass-bg-strong: oklch(0.24 0.009 264 / 0.78);
+--glass-border:    oklch(1 0 0 / 0.10);
+--glass-edge:      oklch(1 0 0 / 0.16); /* 顶缘高光 */
+--glass-blur:      26px;
+--glass-saturate:  140%;</pre>
+      <pre>/* 实机验证（CDP getComputedStyle） */
+topbar bg   → oklch(0.21 0.008 264 / 0.58) ✓ 半透明
+pill filter → blur(26px) saturate(1.4)     ✓
+body bg     → oklab(… / 0.72)              ✓ vibrancy 透出
+html.glass  → true（mac 平台自动打标）      ✓</pre>
+    </div>
+  </div>
+
+  <h2><span class="n">3</span>可召唤的 Ask Render 输入层 <span class="tag new">NEW</span></h2>
+  <div class="card">
+    <p style="margin-top:2px">输入框不再固定占据 76px 底部空间，而是一个<b>全局可用、随时可收起的交互显示层</b>——像键盘一样召之即来、挥之即去。收起时页面拿回空间，只留一条 14px 的「iOS 小白条」召回把手。</p>
+    <div class="demo" id="demo">
+      <div class="page">页面内容（原生 WebContentsView）— 收起时自动拿回 62px</div>
+      <div class="pill"><span>✦</span><span>Ask Render to do something…</span><span class="mic">🎤</span><span class="send">→</span></div>
+      <button class="handle" aria-label="召回" onclick="document.getElementById('demo').classList.remove('hidden')"></button>
+    </div>
+    <div class="demo-btns">
+      <button onclick="document.getElementById('demo').classList.toggle('hidden')">切换 显示 / 收起（试试看）</button>
+    </div>
+    <table style="margin-top:14px">
+      <tr><th>动作</th><th>路径</th><th>实现</th></tr>
+      <tr><td>召唤</td><td><kbd>⌘K</kbd>（全局，含页面持焦时）· 底部小白条 · 工具栏按钮 · 结果卡 Refine/Follow-up 自动唤出</td><td>App 菜单加速键 → <code>IPC.summonInput</code>；chrome 内监听 keydown</td></tr>
+      <tr><td>收起</td><td><kbd>Esc</kbd> · 工具栏按钮再点一次</td><td><code>setInputOpen(false)</code> → 主进程 re-inset 原生视图</td></tr>
+      <tr><td>几何</td><td>展开 76px / 收起 14px</td><td><code>layout.ts CHROME.bottomBand/handleBand</code>，实测 innerHeight 760 ↔ 822（±62px）</td></tr>
+      <tr><td>语音</td><td>胶囊内麦克风按钮</td><td><code>useSpeechInput</code>：webkitSpeechRecognition 特性检测；最终转写追加进草稿；服务不可用时按钮禁用 + 诚实提示</td></tr>
+      <tr><td>状态</td><td>收起时 Agent 忙碌 → 小白条品牌色呼吸</td><td>草稿在收起/召回间保留（组件不卸载）</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="n">4</span>验证记录</h2>
+  <div class="card">
+    <table>
+      <tr><th>检查</th><th>结果</th></tr>
+      <tr><td>TypeScript（main + renderer 两套 tsconfig）</td><td class="ok">✓ 0 错误</td></tr>
+      <tr><td>单元测试（desktop 50 + ux-render 11）</td><td class="ok">✓ 61 通过</td></tr>
+      <tr><td>生产构建 electron-vite build</td><td class="ok">✓</td></tr>
+      <tr><td>实机 CDP：顶栏 84 = 40+44、4 按钮全部在行内、标签未剪裁（30px ∈ 40px 行）</td><td class="ok">✓</td></tr>
+      <tr><td>实机 CDP：玻璃计算样式（半透明顶栏 / blur 胶囊 / vibrancy 透出）</td><td class="ok">✓</td></tr>
+      <tr><td>实机 CDP：Esc 收起 → 页面 +62px；把手召回 → −62px + 焦点回归；工具栏开关双向</td><td class="ok">✓</td></tr>
+      <tr><td>实机 CDP：收起后重载 renderer → 状态还原为收起、页面高度零跳动（M1 修复）</td><td class="ok">✓</td></tr>
+      <tr><td class="muted">备注：窗口被遮挡时 CDP 截图不产帧（Chromium 节流），改用 focus 仿真 + 行为断言完成验证</td><td class="muted">—</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="n">R</span>代码审查（code-reviewer agent）</h2>
+  <div class="card">
+    <p style="margin-top:2px"><b>结论：无 CRITICAL / HIGH。</b>2 个 MEDIUM + 6 个 LOW，已全部修复：</p>
+    <table>
+      <tr><th>级别</th><th>发现</th><th>处理</th></tr>
+      <tr><td>M1</td><td>renderer 重载后输入层状态丢失（重新召唤 + 62px 页面跳动 + 胶囊被原生视图短暂遮挡）</td><td class="ok">getState 携带 <code>inputOpen</code>，renderer「null 直到还原」再采用；实机复验通过</td></tr>
+      <tr><td>M2</td><td>新几何逻辑零测试覆盖</td><td class="ok">新增 <code>test/layout.unit.mjs</code>（5 例：双档 inset、退化尺寸、面板关闭、clamp）；套件 55 绿</td></tr>
+      <tr><td>L1</td><td>语音 toggle 并发守卫用了滞后的 React state</td><td class="ok">改为同步 ref 守卫</td></tr>
+      <tr><td>L2</td><td>⌘K 双层接线注释与实际语义不符</td><td class="ok">注释改为「有意双保险、幂等汇合」</td></tr>
+      <tr><td>L3</td><td>summonInput 缺 webContents 销毁守卫</td><td class="ok">补 <code>webContents.isDestroyed()</code></td></tr>
+      <tr><td>L4</td><td><code>--handle-band</code> 变量定义未使用（契约可能漂移）</td><td class="ok">接为召回把手命中区高度</td></tr>
+      <tr><td>L5</td><td>瞬时 network 错误被当作终态禁用语音</td><td class="ok">两振出局：首个 network 宽限可重试</td></tr>
+      <tr><td>L6</td><td>模态打开时输入胶囊透过 scrim 隐现、Esc 优先级歧义</td><td class="ok">模态期隐藏输入层 + 主动 blur</td></tr>
+      <tr><td class="muted">信息</td><td class="muted">setInputOpen 未校验入参；platform 检测双轨（navigator/process）</td><td class="muted">已coerce <code>open === true</code>；双轨不一致时优雅降级，保留</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="n">+</span>边界与后续</h2>
+  <div class="card">
+    <ul>
+      <li><b>生成式页面（Tier-2）</b>的视觉由外部 <code>~/workspace/opencli-ux</code> kernel 渲染，不在本仓库 —— 已留后续任务把同套玻璃令牌同步过去（本仓库内的 fallback 门户已完成）。</li>
+      <li>语音识别在 Electron 里依赖 Chromium 语音服务；无服务的构建中按钮呈禁用态并提示，不静默失败。</li>
+      <li>Windows / Linux 无 vibrancy：自动保持原实心深色窗口，所有玻璃规则被 <code>html.glass</code> 平台门控。</li>
+      <li>renderer 重载后输入层回到默认展开态（主进程随 effect 收敛，无失步）。</li>
+    </ul>
+  </div>
+
+  <footer>
+    源码：<code>apps/desktop/src/{main,renderer,preload}</code> · <code>packages/{protocol,ux-render}</code> · 报告由本次会话生成，验证脚本见 session scratchpad（verify-ui2.mjs）。
+  </footer>
+</div>
+</body>
+</html>

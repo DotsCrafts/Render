@@ -95,6 +95,27 @@
   --shadow-pop: 0 8px 28px oklch(0 0 0 / 0.5), 0 1px 0 oklch(1 0 0 / 0.05) inset;
   --shadow-pill: 0 6px 24px oklch(0 0 0 / 0.45), 0 0 0 1px oklch(1 0 0 / 0.06);
   --shadow-win: 0 32px 80px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(1 0 0 / 0.07);
+
+  /* — liquid glass materials —
+     Translucent layered surfaces with a specular top edge; pair a --glass-* bg
+     with `backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))`
+     and `box-shadow: var(--shadow-glass)`. Regular / strong / soft = how much of
+     what's behind reads through (toolbar / floating controls / inert chips). */
+  --glass-bg: oklch(0.21 0.008 264 / 0.58);
+  --glass-bg-strong: oklch(0.24 0.009 264 / 0.78);
+  --glass-bg-soft: oklch(0.26 0.009 264 / 0.34);
+  --glass-border: oklch(1 0 0 / 0.1);
+  --glass-edge: oklch(1 0 0 / 0.16); /* specular highlight (top rim light) */
+  --glass-blur: 26px;
+  --glass-saturate: 140%;
+  --shadow-glass:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px var(--glass-border),
+    0 12px 34px oklch(0 0 0 / 0.42);
+  --shadow-glass-pill:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px var(--glass-border),
+    0 10px 40px oklch(0 0 0 / 0.55);
 }
 
 /* ============================  LIGHT  ============================ */
@@ -145,6 +166,20 @@
   --shadow-pop: 0 12px 32px oklch(0.2 0.02 264 / 0.16);
   --shadow-pill: 0 8px 28px oklch(0.2 0.02 264 / 0.16), 0 0 0 1px oklch(0.2 0.02 264 / 0.08);
   --shadow-win: 0 32px 80px oklch(0.2 0.02 264 / 0.2), 0 0 0 1px oklch(0.2 0.02 264 / 0.1);
+
+  --glass-bg: oklch(0.97 0.002 264 / 0.6);
+  --glass-bg-strong: oklch(0.99 0.001 264 / 0.8);
+  --glass-bg-soft: oklch(0.97 0.002 264 / 0.38);
+  --glass-border: oklch(0.2 0.02 264 / 0.1);
+  --glass-edge: oklch(1 0 0 / 0.7);
+  --shadow-glass:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px var(--glass-border),
+    0 12px 34px oklch(0.2 0.02 264 / 0.14);
+  --shadow-glass-pill:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px var(--glass-border),
+    0 10px 40px oklch(0.2 0.02 264 / 0.18);
 }
 
 /* OS preference drives light unless an explicit `.dark` ancestor pins dark. */
@@ -194,6 +229,20 @@
     --shadow-pop: 0 12px 32px oklch(0.2 0.02 264 / 0.16);
     --shadow-pill: 0 8px 28px oklch(0.2 0.02 264 / 0.16), 0 0 0 1px oklch(0.2 0.02 264 / 0.08);
     --shadow-win: 0 32px 80px oklch(0.2 0.02 264 / 0.2), 0 0 0 1px oklch(0.2 0.02 264 / 0.1);
+
+    --glass-bg: oklch(0.97 0.002 264 / 0.6);
+    --glass-bg-strong: oklch(0.99 0.001 264 / 0.8);
+    --glass-bg-soft: oklch(0.97 0.002 264 / 0.38);
+    --glass-border: oklch(0.2 0.02 264 / 0.1);
+    --glass-edge: oklch(1 0 0 / 0.7);
+    --shadow-glass:
+      inset 0 1px 0 var(--glass-edge),
+      inset 0 0 0 1px var(--glass-border),
+      0 12px 34px oklch(0.2 0.02 264 / 0.14);
+    --shadow-glass-pill:
+      inset 0 1px 0 var(--glass-edge),
+      inset 0 0 0 1px var(--glass-border),
+      0 10px 40px oklch(0.2 0.02 264 / 0.18);
   }
 }
 
