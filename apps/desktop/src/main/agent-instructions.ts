@@ -135,6 +135,15 @@ policy), \`opencli skills read opencli-adapter-author\` (authoring end-to-end),
 \`opencli skills read opencli-browser\` (session/selector contract). This
 section is the summary; those are the full playbooks.
 
+**Login-state drift (page logged-in, whoami says not) — bind the self-healing layer FIRST:**
+\`~/.opencli/clis/_shared/site-auth.js\` is patched to arbitrate probe failures
+against page truth (see its SELF-HEAL-NOTES.txt). It binds per site: stage a
+VERBATIM copy of the packaged \`clis/<site>/auth.js\` (plus any \`./\` sibling
+imports it pulls in, RECURSIVELY — missing transitive deps break the whole
+module) and install via \`render-adapter\`. Verify with whoami. Only hand-patch
+the adapter when arbitration isn't enough (wrong cookie gate needing identity,
+e.g. 12306 tk→uKey). Bind ONE site at a time — never mass-copy the catalog.
+
 **Repair loop (max 3 rounds):**
 1. Rule out noise: retry once with an alternative query/entry point — platforms shape results; don't patch a working adapter.
 2. Collect evidence: rerun with \`--trace retain-on-failure 2>trace.yaml\`, read \`trace.summaryPath\` (front matter has \`adapterSourcePath\` — READ it; it may live inside OpenCLIApp.app, which is read-only and must never be edited). Cross-check cookies/DOM with \`opencli browser\` (above).

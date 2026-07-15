@@ -10,16 +10,23 @@
  *   any     ─connect─▶ connecting ─watch(whoami loop)─▶ connected
  *                                   └─ attempts exhausted ─▶ last stable + hint
  *
- * The truth source is `router.whoami` (exit 77 = signed out; a COMMAND_EXEC
- * failure past the auth gate = session live with verify drift; engine failures
- * = unknown — see @render/opencli-router parseWhoami). Stable states persist
- * via connectors-store so the page paints instantly next boot; transient states
- * (checking/connecting) never persist. Every transition emits a fresh immutable
- * snapshot to the renderer.
+ * The truth source is opencli's OWN login-state surface: `opencli auth status`
+ * quickCheck (cookie presence, ZERO navigation, zero bridge lease tabs). The
+ * deep per-site whoami (navigate + scrape) is demoted to a NON-AUTHORITATIVE
+ * account-label enrichment, run only on explicit Check and never allowed to
+ * downgrade a cookie-present badge. This is what killed the field failure where
+ * the panel drove a deep whoami per site, saturated the single browser bridge
+ * under N concurrent connects, and every command timed out at 30s.
+ *
+ * Stable states persist via connectors-store so the page paints instantly next
+ * boot; transient states (checking/connecting) never persist. Every transition
+ * emits a fresh immutable snapshot to the renderer.
  */
 
 import type { ConnectorInfo, ConnectorStatus } from '@render/protocol';
 import type { AuthStatusRow, SiteMeta, WhoamiProbe } from '@render/opencli-router';
+// WhoamiProbe is retained only in the optional router-slice type (deep whoami is
+// no longer on any hot path — login state comes from quick auth status).
 import type { ConnectorsStore, StoredConnector } from './connectors-store.js';
 
 /** The slice of the opencli router the service drives (test seam). */
@@ -27,12 +34,25 @@ export interface ConnectorRouterSlice {
   listSites(): Promise<SiteMeta[]>;
   /** drop cached opencli metadata so listSites re-reads the real catalog */
   reloadMetadata?(): Promise<void>;
-  whoami(site: string): Promise<WhoamiProbe>;
-  /** bulk NO-NAVIGATION quickCheck sweep (`opencli auth status`) — zero tabs */
-  authStatus(): Promise<AuthStatusRow[]>;
+  /** deep whoami (navigates) — RETAINED for reference; the service no longer
+   *  drives login state from it. Kept optional so old fakes still satisfy. */
+  whoami?(site: string): Promise<WhoamiProbe>;
+  /**
+   * NO-NAVIGATION login-state sweep (`opencli auth status`) — the AUTHORITATIVE
+   * signal. `sites` scopes to `--site a,b`; `full: true` additionally runs the
+   * per-site whoami (navigates, serialized) for the account label only.
+   */
+  authStatus(sites?: string[], opts?: { full?: boolean }): Promise<AuthStatusRow[]>;
   logout(site: string): Promise<{ supported: boolean }>;
   /** adapter-driven sign-in (`opencli <site> login`); bounded via timeoutMs */
   login(site: string, opts?: { timeoutMs?: number }): Promise<{ loggedIn: boolean; account?: string }>;
+}
+
+/** A login-state verdict distilled from a quick `auth status` row. */
+interface QuickVerdict {
+  kind: 'connected' | 'disconnected' | 'unknown';
+  account?: string;
+  detail?: string;
 }
 
 export interface ConnectorServiceDeps {
@@ -65,12 +85,13 @@ export interface ConnectorService {
    */
   refreshCatalog(): Promise<ConnectorInfo[]>;
   /**
-   * With a site: one DEEP whoami probe (navigates — user-initiated Check).
-   * Without: one bulk `auth status` quickCheck sweep — cookie presence only,
-   * ZERO navigation, zero tabs (the Refresh button; never runs on open).
+   * With a site: a scoped `auth status` quick probe (cookie presence) for that
+   * one card, plus a bounded account-label enrichment. Without: one bulk
+   * `auth status` quickCheck sweep. Both are navigation-free — the whole page
+   * refreshes with ZERO tabs and ZERO page loads.
    */
   refresh(site?: string): Promise<ConnectorInfo[]>;
-  /** Open the site's login in a Render tab and watch whoami until it flips. */
+  /** Open the site's login in a Render tab and watch quick auth status until it flips. */
   connect(site: string): Promise<ConnectorInfo[]>;
   /** Best-effort `opencli <site> logout`, then re-probe the real state. */
   disconnect(site: string): Promise<ConnectorInfo[]>;
@@ -85,7 +106,9 @@ interface SiteState {
   detail?: string;
 }
 
-const WATCH_INTERVAL_MS = 12_000;
+// Quick (cookie-presence) polling — navigation-free, so it can be brisk without
+// touching the browser bridge. The login flip lands within one interval.
+const WATCH_INTERVAL_MS = 5_000;
 /**
  * WALL-CLOCK bound for the whoami watch. An attempt count alone stretched the
  * journey to ~16 minutes of "Waiting for sign-in" when each probe ran into its
@@ -204,32 +227,83 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     emit();
   };
 
-  const applyProbe = (site: string, probe: WhoamiProbe): void => {
-    const prev = states.get(site);
-    if (probe.kind === 'connected') {
-      apply(site, {
-        status: 'connected',
-        // a verify-drift probe carries no account — keep the last known label
-        ...(probe.account ?? prev?.account ? { account: probe.account ?? prev?.account } : {}),
-        ...(probe.detail ? { detail: probe.detail } : {}),
-        lastChecked: deps.now(),
-      });
-      return;
-    }
-    if (probe.kind === 'disconnected') {
-      apply(site, { status: 'disconnected', lastChecked: deps.now() });
-      return;
-    }
-    apply(site, { status: 'unknown', detail: probe.detail, lastChecked: deps.now() });
-  };
-
   /**
-   * One whoami probe with the transient 'checking' state; deduped per site.
+   * One quick auth-status probe with the transient 'checking' state; deduped per site.
    * A live login WATCH owns its site's badge: a probe that lands mid-journey
    * (a queued auto-refresh, or the human hitting Check) may confirm the login
    * early, but a not-yet verdict must NOT tear waiting-for-sign-in down to
    * "Not connected" while the watch is still polling — journey-caught race.
    */
+  /** Map one `auth status` row → a login-state verdict (pure). */
+  const rowToVerdict = (row: AuthStatusRow | undefined): QuickVerdict => {
+    if (!row) return { kind: 'unknown', detail: 'no auth-status row returned' };
+    if (row.status === 'logged-in') {
+      return { kind: 'connected', ...(row.identity ? { account: row.identity } : {}) };
+    }
+    if (row.status === 'not-logged-in') return { kind: 'disconnected' };
+    return {
+      kind: 'unknown',
+      detail: /quickCheck not implemented/i.test(row.error ?? '')
+        ? 'no quick probe for this adapter — hit Check to verify'
+        : (row.error ?? 'quick check inconclusive'),
+    };
+  };
+
+  /**
+   * The AUTHORITATIVE login-state probe: a `--site <site>` quick `auth status`
+   * (cookie presence, ZERO navigation, zero bridge lease tabs). This replaced
+   * the deep whoami that navigated a page per probe and, under N concurrent
+   * connects, saturated the browser bridge into 30s client-side timeouts.
+   */
+  const quickProbe = async (site: string): Promise<QuickVerdict> => {
+    const rows = await deps.router.authStatus([site]);
+    return rowToVerdict(rows.find((r) => r.site === site));
+  };
+
+  /** Apply a verdict to a site's badge (keeps a known account across drift). */
+  const applyVerdict = (site: string, verdict: QuickVerdict): void => {
+    const prev = states.get(site);
+    if (verdict.kind === 'connected') {
+      const account = verdict.account ?? prev?.account;
+      apply(site, {
+        status: 'connected',
+        ...(account ? { account } : {}),
+        ...(verdict.detail ? { detail: verdict.detail } : {}),
+        lastChecked: deps.now(),
+      });
+    } else if (verdict.kind === 'disconnected') {
+      apply(site, { status: 'disconnected', lastChecked: deps.now() });
+    } else {
+      apply(site, {
+        status: 'unknown',
+        ...(verdict.detail ? { detail: verdict.detail } : {}),
+        lastChecked: deps.now(),
+      });
+    }
+  };
+
+  /**
+   * Best-effort account-label enrichment via `auth status --full` (deep whoami,
+   * serialized in the router). NON-AUTHORITATIVE: it only fills in the account
+   * name while the site STAYS connected, and can NEVER downgrade the badge — a
+   * timed-out or drifted whoami on a cookie-present session must not read as
+   * signed-out. Runs on explicit Check only, so the hot path stays navigation-free.
+   */
+  const enrichAccount = (site: string): void => {
+    void deps.router
+      .authStatus([site], { full: true })
+      .then((rows) => {
+        if (disposed) return;
+        const cur = states.get(site);
+        if (cur?.status !== 'connected') return; // never downgrade / no longer relevant
+        const row = rows.find((r) => r.site === site);
+        if (row?.status === 'logged-in' && row.identity && row.identity !== cur.account) {
+          apply(site, { ...cur, account: row.identity });
+        }
+      })
+      .catch(() => {}); // enrichment is best-effort; the badge already stands
+  };
+
   const probe = async (site: string): Promise<void> => {
     if (probing.has(site) || disposed) return;
     probing.add(site);
@@ -237,17 +311,22 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     const watchOwned = prev?.status === 'connecting' && watches.has(site);
     apply(site, { ...(prev ?? { status: 'unknown' }), status: 'checking' });
     try {
-      const verdict = await deps.router.whoami(site);
+      const verdict = await quickProbe(site);
       if (watchOwned && verdict.kind === 'connected') {
         // deleting the watch claims the single onConnected — if the watch's own
         // poll confirmed first (and deleted), this returns false: no double fire
         const claimed = watches.delete(site);
-        applyProbe(site, verdict);
+        applyVerdict(site, verdict);
         if (claimed) deps.onConnected?.(site, verdict.account);
       } else if (watchOwned && watches.has(site)) {
-        apply(site, prev as SiteState); // restore waiting-for-sign-in
+        apply(site, prev as SiteState); // quick says not-yet → restore waiting
       } else {
-        applyProbe(site, verdict);
+        applyVerdict(site, verdict);
+        // account enrichment only on an explicit Check, and only when connected
+        // without a known name — keeps a bare Connected badge instant.
+        if (verdict.kind === 'connected' && !verdict.account && !states.get(site)?.account) {
+          enrichAccount(site);
+        }
       }
     } catch (err) {
       if (watchOwned && watches.has(site)) {
@@ -265,29 +344,30 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
   };
 
   /**
-   * Poll whoami until the human's login lands, bounded by WALL CLOCK (slow or
-   * unreachable probes must not stretch the journey). Generation-scoped: a
-   * newer connect() or dispose() strands this loop harmlessly.
+   * Poll QUICK auth status until the human's login lands, bounded by WALL CLOCK.
+   * Navigation-free (cookie presence), so it never contends with the login tab
+   * it's watching — the fix for the connect-many-sites bridge meltdown.
+   * Generation-scoped: a newer connect()/dispose() strands this loop harmlessly.
    */
   const beginWatch = (site: string): number => {
     const gen = (watches.get(site) ?? 0) + 1;
     watches.set(site, gen);
     const deadline = deps.now() + WATCH_DEADLINE_MS;
     void (async () => {
-      let lastStable: WhoamiProbe = { kind: 'unknown', detail: 'login not detected yet' };
+      let lastStable: QuickVerdict = { kind: 'unknown', detail: 'login not detected yet' };
       while (deps.now() < deadline) {
         await sleep(WATCH_INTERVAL_MS);
         if (disposed || watches.get(site) !== gen) return;
-        let result: WhoamiProbe;
+        let result: QuickVerdict;
         try {
-          result = await deps.router.whoami(site);
+          result = await quickProbe(site);
         } catch {
-          continue; // transient probe failure — keep watching
+          continue; // transient sweep failure — keep watching
         }
         if (disposed || watches.get(site) !== gen) return;
         if (result.kind === 'connected') {
           watches.delete(site);
-          applyProbe(site, result);
+          applyVerdict(site, result);
           deps.onConnected?.(site, result.account);
           return;
         }
@@ -325,30 +405,17 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
     return snapshot();
   };
 
-  /** Map one `auth status` quickCheck row onto a connector transition. */
+  /** Apply one bulk `auth status` row — same verdict mapping as a scoped probe,
+   *  but a live login watch owns its badge, so mid-journey rows can't tear it down. */
   const applyAuthRow = (row: AuthStatusRow): void => {
     const state = states.get(row.site);
-    // a live login watch owns its badge; quick rows must not tear it down
     if (state?.status === 'connecting' || state?.status === 'checking') return;
-    if (row.status === 'logged-in') {
-      apply(row.site, {
-        status: 'connected',
-        ...(row.identity ?? state?.account ? { account: row.identity ?? state?.account } : {}),
-        detail: 'quick check — session cookie present',
-        lastChecked: deps.now(),
-      });
-      return;
-    }
-    if (row.status === 'not-logged-in') {
-      apply(row.site, { status: 'disconnected', lastChecked: deps.now() });
-      return;
-    }
-    apply(row.site, {
-      status: 'unknown',
-      detail: /quickCheck not implemented/i.test(row.error ?? '')
-        ? 'no quick probe for this adapter — hit Check to verify'
-        : (row.error ?? 'quick check inconclusive'),
-      lastChecked: deps.now(),
+    const verdict = rowToVerdict(row);
+    applyVerdict(row.site, {
+      ...verdict,
+      ...(verdict.kind === 'connected' && !verdict.detail
+        ? { detail: 'quick check — session cookie present' }
+        : {}),
     });
   };
 
@@ -483,7 +550,7 @@ export function createConnectorService(deps: ConnectorServiceDeps): ConnectorSer
         });
         return snapshot();
       }
-      applyProbe(site, await deps.router.whoami(site));
+      applyVerdict(site, await quickProbe(site));
     } catch (err) {
       apply(site, {
         status: 'unknown',
